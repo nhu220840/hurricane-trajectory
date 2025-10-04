@@ -6,7 +6,8 @@ from sklearn.preprocessing import MinMaxScaler
 from pathlib import Path
 
 # ===== CẤU HÌNH =====
-CSV_PATH = Path("data/ibtracs_track_ml.csv")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CSV = REPO_ROOT / "data" / "ibtracs_track_ml.csv"
 OUT_DIR = Path("data/")
 OUT_NPZ = OUT_DIR / "processed_data.npz"
 OUT_PKL = OUT_DIR / "scaler.pkl"
@@ -21,9 +22,9 @@ INPUT_TIMESTEPS = 10
 OUTPUT_TIMESTEPS = 1
 TRAIN_RATIO, VALID_RATIO = 0.70, 0.15
 
-def read_clean_and_create_deltas(csv_path: Path):
+def read_clean_and_create_deltas(DEFAULT_CSV: Path):
     print("Bắt đầu đọc và xử lý dữ liệu thô...")
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(DEFAULT_CSV)
     cols = {'SID':'sid','ISO_TIME':'time','LAT':'lat','LON':'lon',
             'WMO_WIND':'wind','WMO_PRES':'pres'}
     df = df[list(cols)].rename(columns=cols)
@@ -75,7 +76,7 @@ def create_windows(df, in_steps, out_steps, in_feats, tgt_feats):
     return np.stack(Xs), np.stack(ys)
 
 if __name__ == "__main__":
-    df = read_clean_and_create_deltas(CSV_PATH)
+    df = read_clean_and_create_deltas(DEFAULT_CSV)
     df_tr, df_va, df_te = split_by_sid(df, TRAIN_RATIO, VALID_RATIO, RANDOM_SEED)
     interp = GroupedInterpolator(feature_cols=INPUT_FEATURES)
     tr = interp.fit_transform(df_tr); va = interp.transform(df_va); te = interp.transform(df_te)

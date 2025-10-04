@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import pickle
 import folium
+import pandas as pd  # <-- Thêm import pandas
 from pathlib import Path
 from torch import nn
 
@@ -43,8 +44,15 @@ def forecast_iteratively(model, initial_window_scaled, n_steps, scaler, device, 
     with torch.no_grad():
         for _ in range(n_steps):
             predicted_delta = model(current_window_tensor).cpu().numpy().flatten()
+
+            # Lấy dòng cuối cùng từ tensor
             last_scaled_row = current_window_tensor.cpu().numpy().squeeze(0)[-1, :]
-            last_unscaled_row = scaler.inverse_transform(last_scaled_row.reshape(1, -1)).flatten()
+
+            # *** SỬA LỖI: Chuyển NumPy array sang DataFrame có tên cột ***
+            last_scaled_df = pd.DataFrame([last_scaled_row], columns=input_features)
+            last_unscaled_row = scaler.inverse_transform(last_scaled_df).flatten()
+
+            # Tạo dòng dữ liệu mới (chưa scale)
             new_unscaled_row = np.zeros_like(last_unscaled_row)
             new_unscaled_row[idx['lat']] = last_unscaled_row[idx['lat']] + predicted_delta[0]
             new_unscaled_row[idx['lon']] = last_unscaled_row[idx['lon']] + predicted_delta[1]
@@ -54,8 +62,14 @@ def forecast_iteratively(model, initial_window_scaled, n_steps, scaler, device, 
             new_unscaled_row[idx['lon_change']] = new_unscaled_row[idx['lon']] - last_unscaled_row[idx['lon']]
             new_unscaled_row[idx['wind_change']] = 0
             new_unscaled_row[idx['pres_change']] = 0
+
             predicted_points_abs.append((new_unscaled_row[idx['lat']], new_unscaled_row[idx['lon']]))
-            new_scaled_row = scaler.transform(new_unscaled_row.reshape(1, -1))
+
+            # *** SỬA LỖI: Chuyển NumPy array sang DataFrame có tên cột trước khi scale ***
+            new_unscaled_df = pd.DataFrame([new_unscaled_row], columns=input_features)
+            new_scaled_row = scaler.transform(new_unscaled_df)
+
+            # Cập nhật cửa sổ dữ liệu
             new_window_np = np.vstack([current_window_tensor.cpu().numpy().squeeze(0)[1:, :], new_scaled_row])
             current_window_tensor = torch.tensor(new_window_np, dtype=torch.float32).unsqueeze(0).to(device)
 
@@ -85,7 +99,6 @@ def draw_forecast_map(history_coords, truth_coords, pred_coords, out_html):
 
 
 def main():
-    # --- SỬA LỖI: Thêm lại phần tải dữ liệu và khởi tạo model ---
     npz = np.load(DATA_NPZ, allow_pickle=True)
     X_test, y_test_delta = npz["X_test"], npz["y_test"]
     with open(SCALER_PKL, "rb") as f:
@@ -103,7 +116,6 @@ def main():
 
     lat_idx = INPUT_FEATURES.index('lat')
     lon_idx = INPUT_FEATURES.index('lon')
-    # --- KẾT THÚC SỬA LỖI ---
 
     test_indices_to_visualize = [0, 50, 150]
 
@@ -114,12 +126,14 @@ def main():
         print(f"\n--- Đang xử lý mẫu thử {i + 1} (chỉ số {test_sample_index}) ---")
         initial_window_scaled = X_test[test_sample_index]
 
+        # *** SỬA LỖI: Đảm bảo initial_window_scaled là DataFrame trước khi nghịch đảo
+        initial_window_df = pd.DataFrame(initial_window_scaled, columns=INPUT_FEATURES)
+        history_unscaled = scaler.inverse_transform(initial_window_df)
+        history_coords = list(zip(history_unscaled[:, lat_idx], history_unscaled[:, lon_idx]))
+
         predicted_points_abs = forecast_iteratively(
             model, initial_window_scaled, N_STEPS_TO_FORECAST, scaler, device, INPUT_FEATURES
         )
-
-        history_unscaled = scaler.inverse_transform(initial_window_scaled)
-        history_coords = list(zip(history_unscaled[:, lat_idx], history_unscaled[:, lon_idx]))
 
         ground_truth_deltas_full = y_test_delta[test_sample_index: test_sample_index + N_STEPS_TO_FORECAST].squeeze(1)
         truth_coords = reconstruct_path_from_deltas(
