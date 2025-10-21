@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data & Results - Không đưa dữ liệu đã xử lý và kết quả vào Git
+data/processed/
+results/
+*.html
+*.npz
+*.pkl
+
+# Model checkpoints
+models/
+
+# Notebook checkpoints
+.ipynb_checkpoints
+
+# Môi trường ảo
+.venv/
+venv/
+ENV/
