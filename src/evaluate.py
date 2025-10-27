@@ -1,17 +1,21 @@
-# src/evaluate.py
+# src/evaluate.py (Phiên bản rút gọn)
+
 import numpy as np
 import torch
 import pickle
+import pandas as pd
 import matplotlib.pyplot as plt
-import folium
+# import folium # Tạm thời không cần
 from src import config, models, dataset
-from src.train import run_epoch
 from torch.utils.data import DataLoader
 from torchmetrics.regression import MeanAbsoluteError
 from torch import nn
+from src.train import run_epoch  # Import từ src.train
+# Import hàm _create_sequences từ data_processing
+from src.data_processing import _create_sequences
 
 
-# --- Hàm hỗ trợ tải model ---
+# --- Hàm hỗ trợ tải model (Không đổi) ---
 def _load_model(model_type: str, device: torch.device):
     if model_type == 'pytorch':
         checkpoint_path = config.CKPT_PATH_PYTORCH
@@ -23,14 +27,12 @@ def _load_model(model_type: str, device: torch.device):
         ModelClass = models.LSTMFromScratchForecaster
     else:
         raise ValueError("Unknown model type")
-
     try:
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     except FileNotFoundError:
         print(f"LỖI: Không tìm thấy checkpoint: {checkpoint_path}")
         print(f"Vui lòng huấn luyện model '{model_type}' trước.")
         return None, None
-
     model = ModelClass(
         in_dim=checkpoint['in_dim'],
         out_dim=checkpoint['out_dim'],
@@ -43,55 +45,34 @@ def _load_model(model_type: str, device: torch.device):
     return model, checkpoint
 
 
-# --- Hàm hỗ trợ vẽ bản đồ (từ visualize_folium.py cũ) ---
-def _reconstruct_path(start_point, deltas):
-    """Tính toán đường đi từ điểm bắt đầu và các delta dự đoán."""
-    # (Bạn có thể cần điều chỉnh logic này nếu target của bạn là giá trị tuyệt đối)
-    # Giả sử target là 'lat', 'lon' tuyệt đối
-    return deltas
+# --- Hàm vẽ bản đồ (Đã xóa) ---
+# (Chúng ta sẽ thêm lại sau khi bạn sẵn sàng)
 
 
-def _draw_map(history_coords, truth_path, pred_path, out_html, model_name):
-    start_point = history_coords[-1]
-    m = folium.Map(location=start_point, zoom_start=7, tiles="CartoDB positron")
-
-    folium.PolyLine(history_coords, color="gray", weight=3, tooltip="Lịch sử").add_to(m)
-    folium.PolyLine([start_point] + truth_path, color="navy", weight=5, tooltip=f"Thực tế").add_to(m)
-    folium.PolyLine([start_point] + pred_path, color="red", weight=3, dash_array="10, 5",
-                    tooltip=f"Dự đoán ({model_name})").add_to(m)
-
-    m.save(out_html)
-    print(f"Đã lưu bản đồ so sánh tại: '{out_html}'")
-
-
-# --- Hàm chính: Đánh giá và So sánh ---
-
-def run_evaluation_and_plot(sample_index: int = 0):
+# --- Hàm chính (Đã cập nhật) ---
+def run_evaluation_and_plot():
     """
-    Chạy đánh giá trên tập test cho CẢ HAI model và vẽ biểu đồ so sánh.
+    Chạy đánh giá chung trên tập test (dự đoán delta)
     """
-    print("\n--- Bắt đầu Đánh giá và So sánh Model ---")
+    print("\n--- Bắt đầu Đánh giá và So sánh Model (Logic Delta) ---")
 
-    # 1. Tải dữ liệu Test và Scaler
+    # === PHẦN 1: ĐÁNH GIÁ CHUNG TRÊN TẬP TEST (TỪ .NPZ) ===
+
     try:
         npz = np.load(config.PROCESSED_NPZ_PATH, allow_pickle=True)
-        with open(config.SCALER_PATH, "rb") as f:
-            scaler = pickle.load(f)
     except FileNotFoundError:
-        print(f"Lỗi: Không tìm thấy file {config.PROCESSED_NPZ_PATH} hoặc {config.SCALER_PATH}.")
-        print("Vui lòng chạy bước '--process-data' trước.")
+        print(f"Lỗi: Không tìm thấy file {config.PROCESSED_NPZ_PATH}.")
         return
 
-    X_test, y_test = npz["X_test"], npz["y_test"]
+    X_test, y_test = npz["X_test"], npz["y_test"]  # y_test bây giờ là deltas
     INPUT_FEATURES = list(npz["INPUT_FEATURES"])
-    TARGET_FEATURES = list(npz["TARGET_FEATURES"])
+    TARGET_FEATURES = list(npz["TARGET_FEATURES"])  # Sẽ là ['delta_lat', 'delta_lon']
 
     test_loader = DataLoader(dataset.StormSeqDataset(X_test, y_test), batch_size=config.BATCH_SIZE, shuffle=False)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     crit = nn.MSELoss()
     mae_metric = MeanAbsoluteError().to(device)
 
-    # 2. Tải cả hai model
     model_pytorch, _ = _load_model('pytorch', device)
     model_scratch, _ = _load_model('scratch', device)
 
@@ -99,53 +80,45 @@ def run_evaluation_and_plot(sample_index: int = 0):
         print("Thiếu model, không thể so sánh. Dừng lại.")
         return
 
-    # 3. Đánh giá toàn bộ tập Test
     print("Đang đánh giá Model PyTorch (nn.LSTM)...")
     test_loss_pt, test_mae_pt = run_epoch(test_loader, model_pytorch, crit, None, device, False, mae_metric)
-    print(f"[PyTorch]  Test MSE: {test_loss_pt:.6f} | Test MAE: {test_mae_pt:.6f}")
+    print(f"[PyTorch]  Test MSE (delta): {test_loss_pt:.6f} | Test MAE (delta): {test_mae_pt:.6f}")
 
     print("Đang đánh giá Model From-Scratch (ManualLSTM)...")
     test_loss_sc, test_mae_sc = run_epoch(test_loader, model_scratch, crit, None, device, False, mae_metric)
-    print(f"[Scratch]  Test MSE: {test_loss_sc:.6f} | Test MAE: {test_mae_sc:.6f}")
+    print(f"[Scratch]  Test MSE (delta): {test_loss_sc:.6f} | Test MAE (delta): {test_mae_sc:.6f}")
 
-    # 4. Lấy dự đoán cho một mẫu cụ thể (sample_index)
-    x_sample = torch.tensor(X_test[sample_index], dtype=torch.float32).unsqueeze(0).to(device)
-    y_true_sample = y_test[sample_index]  # Shape [1, 2]
+    # Vẽ biểu đồ thanh (Cập nhật nhãn)
+    print(f"\nĐang vẽ biểu đồ so sánh cho mẫu 0 (từ .npz)...")
+
+    # y_true bây giờ là delta
+    y_true_sample_for_bar = y_test[0].flatten()
+    x_sample_for_bar = torch.tensor(X_test[0], dtype=torch.float32).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        y_pred_pt_sample = model_pytorch(x_sample).cpu().numpy().flatten()
-        y_pred_sc_sample = model_scratch(x_sample).cpu().numpy().flatten()
+        y_pred_pt_sample = model_pytorch(x_sample_for_bar).cpu().numpy().flatten()
+        y_pred_sc_sample = model_scratch(x_sample_for_bar).cpu().numpy().flatten()
 
-    # (Giả sử y_true, y_pred đều là [lat, lon])
-    y_true = y_true_sample.flatten()
-
-    # 5. Vẽ Biểu đồ Matplotlib (Yêu cầu chính của bạn)
-    print(f"Đang vẽ biểu đồ so sánh cho mẫu {sample_index}...")
-
-    labels = TARGET_FEATURES  # ['lat', 'lon']
+    labels = TARGET_FEATURES  # ['delta_lat', 'delta_lon']
     x_pos = np.arange(len(labels))
     width = 0.25
-
     fig, ax = plt.subplots(figsize=(10, 6))
-    rects1 = ax.bar(x_pos - width, y_true, width, label='Ground Truth', color='navy')
-    rects2 = ax.bar(x_pos, y_pred_pt_sample, width, label='PyTorch LSTM', color='red')
-    rects3 = ax.bar(x_pos + width, y_pred_sc_sample, width, label='Scratch LSTM', color='orange')
+    rects1 = ax.bar(x_pos - width, y_true_sample_for_bar, width, label='Ground Truth (Delta)', color='navy')
+    rects2 = ax.bar(x_pos, y_pred_pt_sample, width, label='PyTorch LSTM (Delta)', color='red')
+    rects3 = ax.bar(x_pos + width, y_pred_sc_sample, width, label='Scratch LSTM (Delta)', color='orange')
 
-    ax.set_ylabel('Giá trị đã chuẩn hóa (Scaled)')
-    ax.set_title(f'So sánh dự đoán cho Mẫu Test {sample_index}')
+    ax.set_ylabel('Giá trị (Scaled Deltas)')  # <-- Đã cập nhật
+    ax.set_title(f'So sánh dự đoán Delta (1 bước) cho Mẫu Test 0')  # <-- Đã cập nhật
+
     ax.set_xticks(x_pos)
     ax.set_xticklabels(labels)
     ax.legend()
     ax.grid(axis='y', linestyle='--', alpha=0.7)
-
     fig.tight_layout()
     config.PLOT_DIR.mkdir(parents=True, exist_ok=True)
     plt.savefig(config.COMPARISON_PLOT_PATH)
     print(f"Đã lưu biểu đồ so sánh tại: {config.COMPARISON_PLOT_PATH}")
 
-    # 6. (Tùy chọn) Vẽ bản đồ Folium cho cả hai
-    # Bạn sẽ cần logic để giải nén (inverse_transform) tọa độ
-    # (Phần này phức tạp hơn, tùy thuộc vào dữ liệu của bạn là delta hay tuyệt đối)
-    # ... (Bỏ qua phần vẽ map phức tạp để tập trung vào biểu đồ) ...
-
-    print("--- Hoàn tất Đánh giá ---")
+    print("--- Hoàn tất Đánh giá (Logic Delta) ---")
+    print("\nPhần vẽ bản đồ tự hồi quy đã được tạm thời vô hiệu hóa.")
+    print("Sau khi huấn luyện xong, hãy cho tôi biết để tôi cung cấp logic vẽ bản đồ mới.")

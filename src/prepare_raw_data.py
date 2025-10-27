@@ -12,7 +12,9 @@ COLUMNS_TO_KEEP = [
     'WMO_WIND',
     'WMO_PRES',
     'STORM_SPEED',
-    'STORM_DIR'
+    'STORM_DIR',
+    'DIST2LAND',
+    'BASIN',
 ]
 
 def run_raw_data_preparation():
