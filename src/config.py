@@ -1,59 +1,55 @@
-# src/config.py
+# src/config.py (Cập nhật)
 from pathlib import Path
 
-# ----- PATHS -----
+# --- Đường dẫn ---
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
-RAW_DATA_PATH = DATA_DIR / "raw" / "ibtracs_track_ml.csv"
-PROCESSED_DATA_DIR = DATA_DIR / "processed"
 
-# --- SỬA LỖI Ở ĐÂY ---
-# Xóa "/processed" bị trùng lặp
-PROCESSED_DATA_NPZ = PROCESSED_DATA_DIR / "processed_data.npz"
-# --- KẾT THÚC SỬA LỖI ---
+# Cập nhật đường dẫn thư mục RAW
+RAW_DATA_DIR = DATA_DIR / "raw"
+# File CSV lớn (input cho bước 1)
+RAW_IBTRACS_FILE = RAW_DATA_DIR / "ibtracs.last3years.list.v04r01.csv"
+# File CSV đã cắt (output bước 1, input bước 2)
+RAW_DATA_PATH = RAW_DATA_DIR / "ibtracs_track_ml.csv"
 
-# Sử dụng 2 scaler
-SCALER_X_PKL = PROCESSED_DATA_DIR / "scaler_X.pkl"
-SCALER_Y_PKL = PROCESSED_DATA_DIR / "scaler_y.pkl"
+# Cập nhật đường dẫn thư mục PROCESSED
+PROCESSED_DIR = DATA_DIR / "processed"
+PROCESSED_CSV_PATH = PROCESSED_DIR / "ibtracs_processed_v2.csv" # File tạm do bước 2 tạo ra
+PROCESSED_NPZ_PATH = PROCESSED_DIR / "processed_data.npz"
+SCALER_PATH = PROCESSED_DIR / "scaler.pkl"
 
 MODEL_DIR = ROOT_DIR / "models"
-MODEL_CKPT_PATH = MODEL_DIR / "best_lstm_attention_model.pt"
-RESULT_DIR = ROOT_DIR / "results" / "real_forecasts"
+CKPT_PATH_PYTORCH = MODEL_DIR / "best_lstm_pytorch.pt"
+CKPT_PATH_SCRATCH = MODEL_DIR / "best_lstm_scratch.pt"
 
-# ----- DATA PROCESSING -----
-RANDOM_SEED = 42
-TRAIN_RATIO = 0.70
-VALID_RATIO = 0.15
-INPUT_TIMESTEPS = 10
-OUTPUT_TIMESTEPS = 1
+RESULTS_DIR = ROOT_DIR / "results"
+MAP_DIR = RESULTS_DIR / "maps"
+PLOT_DIR = RESULTS_DIR / "plots"
+COMPARISON_PLOT_PATH = PLOT_DIR / "model_comparison.png"
 
-NUMERICAL_FEATURES = ['LAT', 'LON', 'WMO_WIND', 'WMO_PRES', 'DIST2LAND']
-CATEGORICAL_FEATURES = ['BASIN', 'NATURE']
-
-# Mục tiêu: Dự đoán delta của các đặc trưng vật lý
-FINAL_INPUT_FEATURES = []
-TARGET_FEATURES = [
-    'LAT_delta',
-    'LON_delta',
-    'WMO_WIND_delta',
-    'WMO_PRES_delta',
-    'DIST2LAND_delta'
-]
-
-# ----- MODEL & TRAINING -----
-BATCH_SIZE = 128
-EPOCHS = 50
+# --- Cấu hình Huấn luyện ---
+BATCH_SIZE = 64
+EPOCHS = 40
 PATIENCE = 10
 LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 1e-5
+WEIGHT_DECAY = 1e-4
+
+# --- Cấu hình Model ---
 MODEL_PARAMS = {
-    "hidden_dim": 64,
-    "num_layers": 2,
-    "dropout": 0.3
+    "pytorch": {
+        "hidden": 20,
+        "num_layers": 1,
+        "dropout": 0.2
+    },
+    "scratch": {
+        "hidden": 20,
+        "num_layers": 2,
+        "dropout": 0.2
+    }
 }
 
-# ----- FORECASTING (THEO YÊU CẦU CỦA BẠN) -----
-N_STEPS_TO_FORECAST = 8     # 8 BƯỚC DỰ ĐOÁN
-TIME_STEP_HOURS = 3         # MỖI BƯỚC CÁCH NHAU 3 GIỜ
-# (Tổng cộng: 8 * 3 = 24 giờ)
-TEST_INDICES_TO_VISUALIZE = [0, 50, 150]
+# --- Cấu hình Đánh giá & Trực quan hóa ---
+# Số bước dự đoán (ví dụ: 3 bước = 3h, 6h, 9h)
+FORECAST_STEPS = 3
+# Tên file cho bản đồ so sánh
+MAP_COMPARISON_PATH = MAP_DIR / "model_comparison_map.html"

@@ -2,163 +2,158 @@
 import pandas as pd
 import numpy as np
 import pickle
-from sklearn.preprocessing import StandardScaler
-from src import config
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.compose import ColumnTransformer
+from src import config  # Import từ config
 
 
-def feature_engineering(df):
-    """Tạo các đặc trưng mới, bao gồm 5 đặc trưng delta."""
-    df = df.copy()
-    df['ISO_TIME'] = pd.to_datetime(df['ISO_TIME'], errors='coerce')
-    df.dropna(subset=['ISO_TIME'], inplace=True)
-    df = df.sort_values(['SID', 'ISO_TIME']).reset_index(drop=True)
+# --- Phần 1: Lấy từ 'preprocessing.py' ---
 
-    # Điền giá trị thiếu cho các cột số trước khi tính delta
-    for col in config.NUMERICAL_FEATURES:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-        df[col] = df.groupby('SID')[col].ffill().bfill()
+class GroupedInterpolator(BaseEstimator, TransformerMixin):
+    # ... (Sao chép y hệt class GroupedInterpolator từ file preprocessing.py) ...
+    def __init__(self, group_col='sid', feature_cols=None, method='linear'):
+        self.group_col = group_col
+        self.feature_cols = feature_cols
+        self.method = method
 
-    # Tạo đặc trưng tuần hoàn
-    df['month'] = df['ISO_TIME'].dt.month
-    df['day'] = df['ISO_TIME'].dt.day
-    df['hour'] = df['ISO_TIME'].dt.hour
-    df['sin_month'] = np.sin(2 * np.pi * df['month'] / 12)
-    df['cos_month'] = np.cos(2 * np.pi * df['month'] / 12)
-    df['sin_day'] = np.sin(2 * np.pi * df['day'] / 31)
-    df['cos_day'] = np.cos(2 * np.pi * df['day'] / 31)
-    df['sin_hour'] = np.sin(2 * np.pi * df['hour'] / 24)
-    df['cos_hour'] = np.cos(2 * np.pi * df['hour'] / 24)
+    def fit(self, X, y=None):
+        return self
 
-    # --- THAY ĐỔI: Tạo 5 đặc trưng delta ---
-    dfg = df.groupby('SID')
-    df['LAT_delta'] = dfg['LAT'].diff().fillna(0)
-    df['LON_delta'] = dfg['LON'].diff().fillna(0)
-    df['WMO_WIND_delta'] = dfg['WMO_WIND'].diff().fillna(0)
-    df['WMO_PRES_delta'] = dfg['WMO_PRES'].diff().fillna(0)
-    df['DIST2LAND_delta'] = dfg['DIST2LAND'].diff().fillna(0)
-    # ------------------------------------
-
-    df = pd.get_dummies(df, columns=config.CATEGORICAL_FEATURES, prefix=config.CATEGORICAL_FEATURES)
-    for col in df.select_dtypes(include='bool').columns:
-        df[col] = df[col].astype(int)
-
-    # Xử lý các giá trị vô hạn (nếu có)
-    df.replace([np.inf, -np.inf], 0, inplace=True)
-
-    return df
+    def transform(self, X, y=None):
+        X_copy = X.copy()
+        interpolated_features = X_copy.groupby(self.group_col)[self.feature_cols].transform(
+            lambda x: x.interpolate(method=self.method)
+        )
+        X_copy[self.feature_cols] = interpolated_features
+        X_filled = X_copy.groupby(self.group_col, group_keys=False).apply(
+            lambda group: group.fillna(method='bfill').fillna(method='ffill')
+        )
+        X_filled.dropna(inplace=True)
+        return X_filled
 
 
-def create_windows(df, input_features, target_features, in_steps, out_steps):
-    """
-    Trả về: Xs (Inputs), ys (Targets), X_last_datetimes (để dự báo)
-    """
-    Xs, ys, X_last_datetimes = [], [], []
+def _run_sklearn_pipeline():
+    """Đọc CSV thô, chạy pipeline và lưu CSV đã xử lý."""
+    try:
+        df = pd.read_csv(config.RAW_DATA_PATH, keep_default_na=False, na_values=[' '])
+    except FileNotFoundError:
+        print(f"LỖI: Không tìm thấy file {config.RAW_DATA_PATH}")
+        return None
 
-    df['SID'] = df['SID'].astype('category')
+    columns_to_keep = {
+        'SID': 'sid', 'ISO_TIME': 'time', 'LAT': 'lat', 'LON': 'lon',
+        'WMO_WIND': 'wind', 'WMO_PRES': 'pres', 'STORM_SPEED': 'speed', 'STORM_DIR': 'direction'
+    }
+    df_clean = df[list(columns_to_keep.keys())].rename(columns=columns_to_keep)
 
-    cols_to_group = list(dict.fromkeys(input_features + target_features + ['ISO_TIME']))
+    df_clean['time'] = pd.to_datetime(df_clean['time'])
+    feature_cols = ['lat', 'lon', 'wind', 'pres', 'speed', 'direction']
+    for col in feature_cols:
+        df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+    df_clean = df_clean.sort_values(by=['sid', 'time'])
 
-    for sid, group in df.groupby('SID', observed=False):
-        n = len(group)
-        if n < in_steps + out_steps:
+    numeric_features = ['lat', 'lon', 'wind', 'pres', 'speed', 'direction']
+    full_pipeline = Pipeline(steps=[
+        ('custom_interpolator', GroupedInterpolator(group_col='sid', feature_cols=numeric_features)),
+        ('preprocessor', ColumnTransformer(transformers=[
+            ('scaler', MinMaxScaler(), numeric_features)
+        ], remainder='passthrough'))
+    ])
+
+    data_transformed = full_pipeline.fit_transform(df_clean)
+    new_column_names = numeric_features + [col for col in df_clean.columns if col not in numeric_features]
+    df_final = pd.DataFrame(data_transformed, columns=new_column_names)
+    df_final = df_final[['sid', 'time'] + numeric_features]
+
+    # Lưu scaler
+    scaler = full_pipeline.named_steps['preprocessor'].named_transformers_['scaler']
+    with open(config.SCALER_PATH, 'wb') as f:
+        pickle.dump(scaler, f)
+    print(f"Đã lưu scaler vào {config.SCALER_PATH}")
+
+    # Lưu file CSV đã xử lý
+    df_final.to_csv(config.PROCESSED_CSV_PATH, index=False)
+    print(f"Đã lưu dữ liệu đã xử lý vào {config.PROCESSED_CSV_PATH}")
+    return df_final, feature_cols
+
+
+# --- Phần 2: Lấy từ 'scripts/create_ts_data.py' ---
+# (Tôi sẽ điều chỉnh lại một chút cho phù hợp)
+
+def _create_sequences(df_group, input_features, target_features, n_in, n_out):
+    # ... (Logic tạo chuỗi, bạn có thể copy từ file create_ts_data.py) ...
+    # ... (Hãy đảm bảo nó trả về X, y cho nhóm đó) ...
+    # Đây là một ví dụ đơn giản hóa:
+    X, y = [], []
+    data = df_group[input_features].values.astype(np.float32)
+    target_data = df_group[target_features].values.astype(np.float32)
+
+    for i in range(len(data) - n_in - n_out + 1):
+        X.append(data[i: i + n_in])
+        y.append(target_data[i + n_in: i + n_in + n_out])
+
+    if not X:
+        return np.array([]), np.array([])
+
+    return np.array(X), np.array(y)
+
+
+def _convert_csv_to_npz(df, input_features):
+    """Chuyển đổi DataFrame đã xử lý thành các chuỗi và lưu vào .npz"""
+    N_IN, N_OUT = 10, 1  # Cấu hình cửa sổ thời gian
+    TARGET_FEATURES = ['lat', 'lon']  # Mục tiêu dự đoán
+
+    all_X, all_y = [], []
+    grouped = df.groupby('sid')
+    for sid, group in grouped:
+        if len(group) < N_IN + N_OUT:
             continue
+        X, y = _create_sequences(group, input_features, TARGET_FEATURES, N_IN, N_OUT)
+        if X.shape[0] > 0:
+            all_X.append(X)
+            all_y.append(y)
 
-        group_data = group[cols_to_group]
+    X = np.concatenate(all_X, axis=0)
+    y = np.concatenate(all_y, axis=0)
 
-        for i in range(n - in_steps - out_steps + 1):
-            input_window_data = group_data.iloc[i: i + in_steps]
-            target_window_data = group_data.iloc[i + in_steps: i + in_steps + out_steps]
+    # Tách dữ liệu (ví dụ: 70-15-15)
+    n = len(X)
+    n_train = int(n * 0.7)
+    n_valid = int(n * 0.15)
 
-            Xs.append(input_window_data[input_features].to_numpy(dtype=np.float32))
-            ys.append(target_window_data[target_features].to_numpy(dtype=np.float32))
-            X_last_datetimes.append(input_window_data.iloc[-1]['ISO_TIME'])
+    X_train, y_train = X[:n_train], y[:n_train]
+    X_valid, y_valid = X[n_train: n_train + n_valid], y[n_train: n_train + n_valid]
+    X_test, y_test = X[n_train + n_valid:], y[n_train + n_valid:]
 
-    # squeeze ys để loại bỏ chiều không cần thiết (n, 1, 5) -> (n, 5)
-    return np.array(Xs), np.squeeze(np.array(ys), axis=1), np.array(X_last_datetimes)
-
-
-def run_processing():
-    """Hàm chính: Sử dụng 2 scaler (scaler_X và scaler_y)"""
-    print("Bắt đầu pipeline xử lý dữ liệu nâng cao...")
-    df = pd.read_csv(config.RAW_DATA_PATH)
-
-    print("1. Đang tạo các đặc trưng (Feature Engineering)...")
-    df_featured = feature_engineering(df)
-
-    # Xác định Input Features (22 features)
-    final_input_features = config.NUMERICAL_FEATURES + \
-                           [col for col in df_featured.columns if 'sin_' in col or 'cos_' in col] + \
-                           [col for col in df_featured.columns if
-                            any(cat_feat in col for cat_feat in config.CATEGORICAL_FEATURES)]
-
-    final_input_features = [f for f in final_input_features if
-                            f in df_featured.columns and df_featured[f].dtype != 'object']
-
-    # Xác định Target Features (5 features)
-    target_features = config.TARGET_FEATURES
-
-    # Đảm bảo tất cả các cột đều là số và điền NA
-    for col in final_input_features + target_features:
-        df_featured[col] = pd.to_numeric(df_featured[col], errors='coerce').fillna(0)
-
-    # Chia dữ liệu
-    sids = df_featured['SID'].unique()
-    np.random.seed(config.RANDOM_SEED)
-    np.random.shuffle(sids)
-    n_tr = int(len(sids) * config.TRAIN_RATIO)
-    n_va = int(len(sids) * config.VALID_RATIO)
-    tr_sids, va_sids, te_sids = sids[:n_tr], sids[n_tr:n_tr + n_va], sids[n_tr + n_va:]
-    df_tr = df_featured[df_featured.SID.isin(tr_sids)].copy()
-    df_va = df_featured[df_featured.SID.isin(va_sids)].copy()
-    df_te = df_featured[df_featured.SID.isin(te_sids)].copy()
-    print(f"2. Đã chia dữ liệu: {len(tr_sids)} train, {len(va_sids)} valid, {len(te_sids)} test.")
-
-    # Ép kiểu float64 để dập tắt cảnh báo
-    for col in final_input_features:
-        df_tr[col] = df_tr[col].astype('float64')
-        df_va[col] = df_va[col].astype('float64')
-        df_te[col] = df_te[col].astype('float64')
-    for col in target_features:
-        df_tr[col] = df_tr[col].astype('float64')
-        df_va[col] = df_va[col].astype('float64')
-        df_te[col] = df_te[col].astype('float64')
-
-    # --- THAY ĐỔI: SỬ DỤNG 2 SCALER ---
-    print(f"3. Đang chuẩn hóa {len(final_input_features)} Input Features (scaler_X)...")
-    scaler_X = StandardScaler()
-    df_tr.loc[:, final_input_features] = scaler_X.fit_transform(df_tr[final_input_features])
-    df_va.loc[:, final_input_features] = scaler_X.transform(df_va[final_input_features])
-    df_te.loc[:, final_input_features] = scaler_X.transform(df_te[final_input_features])
-
-    print(f"4. Đang chuẩn hóa {len(target_features)} Target Features (scaler_y)...")
-    scaler_y = StandardScaler()
-    df_tr.loc[:, target_features] = scaler_y.fit_transform(df_tr[target_features])
-    df_va.loc[:, target_features] = scaler_y.transform(df_va[target_features])
-    df_te.loc[:, target_features] = scaler_y.transform(df_te[target_features])
-    # -----------------------------------
-
-    print("5. Đang tạo cửa sổ dữ liệu...")
-    X_train, y_train, X_train_last_dt = create_windows(df_tr, final_input_features, target_features,
-                                                       config.INPUT_TIMESTEPS, config.OUTPUT_TIMESTEPS)
-    X_valid, y_valid, X_valid_last_dt = create_windows(df_va, final_input_features, target_features,
-                                                       config.INPUT_TIMESTEPS, config.OUTPUT_TIMESTEPS)
-    X_test, y_test, X_test_last_dt = create_windows(df_te, final_input_features, target_features,
-                                                    config.INPUT_TIMESTEPS, config.OUTPUT_TIMESTEPS)
-
-    print(f"   - Train shapes: X={X_train.shape}, y={y_train.shape}, dt={X_train_last_dt.shape}")
-
-    config.PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        config.PROCESSED_DATA_NPZ,
-        X_train=X_train, y_train=y_train, X_train_last_dt=X_train_last_dt,
-        X_valid=X_valid, y_valid=y_valid, X_valid_last_dt=X_valid_last_dt,
-        X_test=X_test, y_test=y_test, X_test_last_dt=X_test_last_dt,
-        INPUT_FEATURES=np.array(final_input_features, dtype=object),
-        TARGET_FEATURES=np.array(target_features, dtype=object)
+    # Lưu vào file NPZ
+    np.savez_compressed(
+        config.PROCESSED_NPZ_PATH,
+        X_train=X_train, y_train=y_train,
+        X_valid=X_valid, y_valid=y_valid,
+        X_test=X_test, y_test=y_test,
+        INPUT_FEATURES=input_features,
+        TARGET_FEATURES=TARGET_FEATURES
     )
-    # --- THAY ĐỔI: Lưu 2 scaler ---
-    with open(config.SCALER_X_PKL, "wb") as f:
-        pickle.dump(scaler_X, f)
-    with open(config.SCALER_Y_PKL, "wb") as f:
-        pickle.dump(scaler_y, f)
-    print(f"6. Đã lưu thành công dữ liệu và 2 scaler (X và y).")
+    print(f"Đã lưu dữ liệu chuỗi vào {config.PROCESSED_NPZ_PATH}")
+
+
+# --- Hàm chính để chạy từ main.py ---
+def run_data_pipeline():
+    """Hàm chính: Chạy toàn bộ pipeline tiền xử lý dữ liệu."""
+    print("--- Bắt đầu Pipeline Tiền xử lý Dữ liệu ---")
+
+    # 1. Chạy Sklearn Pipeline
+    processed_df, feature_cols = _run_sklearn_pipeline()
+
+    if processed_df is not None:
+        # 2. Chuyển đổi sang NPZ
+        _convert_csv_to_npz(processed_df, feature_cols)
+
+    print("--- Pipeline Tiền xử lý Hoàn tất ---")
+
+
+if __name__ == "__main__":
+    # Cho phép chạy file này độc lập để test
+    run_data_pipeline()
