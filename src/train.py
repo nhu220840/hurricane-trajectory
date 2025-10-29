@@ -1,142 +1,189 @@
 # src/train.py
+
+import os
+import random
 import numpy as np
 import torch
-from torch import nn
 from torch.utils.data import DataLoader
-from torchmetrics.regression import MeanAbsoluteError
-from src import config, models, dataset
+
+from .config import (
+    PROCESSED_NPZ,
+    EPOCHS, BATCH_SIZE, LR, WEIGHT_DECAY, PATIENCE, FACTOR, CLIP_NORM,
+    LSTM_TORCH, LSTM_SCRATCH, DEVICE, SEED,
+    CHECKPOINT_LSTM_TORCH, CHECKPOINT_LSTM_SCRATCH
+)
+from .dataset import StormSeqDataset
+from .models import LSTMForecaster, LSTMFromScratchForecaster
 
 
-# --- Logic huấn luyện (Lấy từ REbuildLSTM.ipynb vì rõ ràng hơn) ---
-
-@torch.no_grad()
-def _eval_epoch(loader, model, crit, device, mae_metric):
-    model.eval()
-    total_loss, n_samples = 0.0, 0
-    mae_metric.reset()
-    for xb, yb in loader:
-        xb, yb = xb.to(device), yb.to(device)
-        pred = model(xb)
-        loss = crit(pred, yb)
-        mae_metric.update(pred, yb)
-        total_loss += loss.item() * xb.size(0)
-        n_samples += xb.size(0)
-    return total_loss / max(n_samples, 1), mae_metric.compute()
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
-def _train_epoch(loader, model, crit, opt, device, mae_metric):
-    model.train()
-    total_loss, n_samples = 0.0, 0
-    mae_metric.reset()
-    for xb, yb in loader:
-        xb, yb = xb.to(device), yb.to(device)
-        pred = model(xb)
-        loss = crit(pred, yb)
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        opt.step()
-        mae_metric.update(pred, yb)
-        total_loss += loss.item() * xb.size(0)
-        n_samples += xb.size(0)
-    return total_loss / max(n_samples, 1), mae_metric.compute()
+def _split_by_sid(window_sid_idx, train_ratio=0.7, val_ratio=0.15, seed=SEED):
+    uniq = np.unique(window_sid_idx)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(uniq)
+    n = len(uniq)
+    n_train = int(n * train_ratio)
+    n_val = int(n * val_ratio)
+    train_sids = set(uniq[:n_train])
+    val_sids = set(uniq[n_train:n_train+n_val])
+    test_sids = set(uniq[n_train+n_val:])
+    return train_sids, val_sids, test_sids
 
 
-def run_epoch(loader, model, crit, opt, device, train_mode, mae_metric):
-    if train_mode:
-        return _train_epoch(loader, model, crit, opt, device, mae_metric)
+def _filter_by_sid_idx(arr, sid_idx, keep_sids):
+    mask = np.isin(sid_idx, list(keep_sids))
+    return arr[mask], mask
+
+
+def _finite_batch(Xb, Yb):
+    x_ok = torch.isfinite(Xb).all()
+    y_ok = torch.isfinite(Yb).all()
+    return bool(x_ok and y_ok)
+
+
+def train_one_model(model_name: str):
+    set_seed(SEED)
+    use_device = "cuda" if (torch.cuda.is_available() and DEVICE == "cuda") else "cpu"
+
+    data = np.load(PROCESSED_NPZ, allow_pickle=True)
+    X = data["X"]                          # (B, N_IN, d)
+    Y = data["Y"]                          # (B, 2) delta (scaled)
+    last_obs = data["last_obs_latlon"]     # (B, 2)
+    sid_idx = data["window_sid_idx"]       # (B,)
+
+    # guard: if still bad
+    if not (np.isfinite(X).all() and np.isfinite(Y).all()):
+        raise ValueError("X/Y vẫn có NaN/Inf sau tiền xử lý. Kiểm tra lại data_processing.py.")
+
+    train_sids, val_sids, test_sids = _split_by_sid(sid_idx, seed=SEED)
+
+    X_train, m_tr = _filter_by_sid_idx(X, sid_idx, train_sids)
+    Y_train = Y[m_tr]
+    last_tr = last_obs[m_tr]
+
+    X_val, m_val = _filter_by_sid_idx(X, sid_idx, val_sids)
+    Y_val = Y[m_val]
+    last_val = last_obs[m_val]
+
+    X_test, m_te = _filter_by_sid_idx(X, sid_idx, test_sids)
+    Y_test = Y[m_te]
+    last_test = last_obs[m_te]
+
+    ds_tr = StormSeqDataset(X_train, Y_train, last_tr)
+    ds_val = StormSeqDataset(X_val, Y_val, last_val)
+    ds_te = StormSeqDataset(X_test, Y_test, last_test)
+
+    dl_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, shuffle=True, drop_last=False)
+    dl_val = DataLoader(ds_val, batch_size=BATCH_SIZE, shuffle=False, drop_last=False)
+    dl_te = DataLoader(ds_te, batch_size=BATCH_SIZE, shuffle=False, drop_last=False)
+
+    input_size = X.shape[-1]
+
+    if model_name == "pytorch":
+        model = LSTMForecaster(
+            input_size=input_size,
+            hidden_size=LSTM_TORCH["hidden_size"],
+            num_layers=LSTM_TORCH["num_layers"],
+            dropout=LSTM_TORCH["dropout"]
+        )
+        ckpt_path = CHECKPOINT_LSTM_TORCH
+    elif model_name == "scratch":
+        model = LSTMFromScratchForecaster(
+            input_size=input_size,
+            hidden_size=LSTM_SCRATCH["hidden_size"],
+            num_layers=LSTM_SCRATCH["num_layers"],
+            dropout=LSTM_SCRATCH["dropout"]
+        )
+        ckpt_path = CHECKPOINT_LSTM_SCRATCH
     else:
-        return _eval_epoch(loader, model, crit, device, mae_metric)
+        raise ValueError("model_name phải là 'pytorch' hoặc 'scratch'.")
 
+    model = model.to(use_device)
 
-# --- Hàm huấn luyện chính ---
+    optim = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode="min", factor=FACTOR, patience=max(1, PATIENCE//2))
+    criterion = torch.nn.MSELoss()
 
-def run_training(model_type: str):
-    """
-    Hàm chính để huấn luyện một model.
-    model_type: 'pytorch' hoặc 'scratch'
-    """
-    if model_type not in ['pytorch', 'scratch']:
-        raise ValueError("model_type phải là 'pytorch' hoặc 'scratch'")
+    best_val = float("inf")
+    wait = 0
+    for epoch in range(1, EPOCHS+1):
+        # ---- train ----
+        model.train()
+        loss_sum = 0.0
+        n_seen = 0
+        skipped = 0
+        for Xb, Yb, _ in dl_tr:
+            Xb = Xb.to(use_device)
+            Yb = Yb.to(use_device)
+            if not _finite_batch(Xb, Yb):
+                skipped += Xb.size(0)
+                continue
+            pred = model(Xb)        # (B,2)
+            if not torch.isfinite(pred).all():
+                skipped += Xb.size(0)
+                continue
+            loss = criterion(pred, Yb)
+            if not torch.isfinite(loss):
+                skipped += Xb.size(0)
+                continue
+            optim.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), CLIP_NORM)
+            optim.step()
+            loss_sum += loss.item() * Xb.size(0)
+            n_seen += Xb.size(0)
 
-    print(f"\n--- Bắt đầu huấn luyện model: {model_type.upper()} ---")
+        loss_tr = float("nan") if n_seen == 0 else (loss_sum / n_seen)
 
-    # 1. Tải dữ liệu
-    try:
-        npz = np.load(config.PROCESSED_NPZ_PATH, allow_pickle=True)
-    except FileNotFoundError:
-        print(f"Lỗi: Không tìm thấy file {config.PROCESSED_NPZ_PATH}.")
-        print("Vui lòng chạy bước '--process-data' trước.")
-        return
+        # ---- val ----
+        model.eval()
+        val_sum = 0.0
+        n_val_seen = 0
+        with torch.no_grad():
+            for Xb, Yb, _ in dl_val:
+                Xb = Xb.to(use_device); Yb = Yb.to(use_device)
+                if not _finite_batch(Xb, Yb):
+                    continue
+                pred = model(Xb)
+                if not torch.isfinite(pred).all():
+                    continue
+                loss = criterion(pred, Yb)
+                if not torch.isfinite(loss):
+                    continue
+                val_sum += loss.item() * Xb.size(0)
+                n_val_seen += Xb.size(0)
+        loss_va = float("nan") if n_val_seen == 0 else (val_sum / n_val_seen)
 
-    X_train, y_train = npz["X_train"], npz["y_train"]
-    X_valid, y_valid = npz["X_valid"], npz["y_valid"]
-    INPUT_FEATURES = list(npz["INPUT_FEATURES"])
-    TARGET_FEATURES = list(npz["TARGET_FEATURES"])
+        if np.isfinite(loss_va):
+            sched.step(loss_va)
 
-    in_dim = X_train.shape[2]
-    out_dim = y_train.shape[-1] if y_train.ndim >= 2 else 1
+        info_skipped = f" | skipped_train={skipped}" if skipped else ""
+        print(f"[{model_name}] Epoch {epoch:03d}/{EPOCHS} | train={loss_tr:.6f} | val={loss_va:.6f}{info_skipped}")
 
-    # 2. Tạo DataLoaders
-    train_loader = DataLoader(dataset.StormSeqDataset(X_train, y_train), batch_size=config.BATCH_SIZE, shuffle=True)
-    valid_loader = DataLoader(dataset.StormSeqDataset(X_valid, y_valid), batch_size=config.BATCH_SIZE, shuffle=False)
-
-    # 3. Thiết bị
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Sử dụng thiết bị: {device}")
-
-    # 4. Khởi tạo Model, Loss, Optimizer
-    params = config.MODEL_PARAMS[model_type]
-
-    if model_type == 'pytorch':
-        model = models.LSTMForecaster(
-            in_dim=in_dim,
-            hidden=params["hidden"],
-            num_layers=params["num_layers"],
-            out_dim=out_dim,
-            dropout=params["dropout"]
-        ).to(device)
-        checkpoint_path = config.CKPT_PATH_PYTORCH
-    else:  # 'scratch'
-        model = models.LSTMFromScratchForecaster(
-            in_dim=in_dim,
-            hidden=params["hidden"],
-            num_layers=params["num_layers"],
-            out_dim=out_dim,
-            dropout=params["dropout"]
-        ).to(device)
-        checkpoint_path = config.CKPT_PATH_SCRATCH
-
-    crit = nn.MSELoss()
-    opt = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
-    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=3)
-    mae_metric = MeanAbsoluteError().to(device)
-
-    # 5. Vòng lặp huấn luyện
-    best_loss, bad_epochs = float("inf"), 0
-    config.MODEL_DIR.mkdir(parents=True, exist_ok=True)
-
-    for ep in range(1, config.EPOCHS + 1):
-        tr_loss, _ = run_epoch(train_loader, model, crit, opt, device, True, mae_metric)
-        va_loss, va_mae = run_epoch(valid_loader, model, crit, None, device, False, mae_metric)
-        sched.step(va_loss)
-        print(f"Epoch {ep:02d} | Train Loss {tr_loss:.6f} | Valid Loss {va_loss:.6f} | Valid MAE {va_mae:.6f}")
-
-        if va_loss < best_loss - 1e-12:
-            best_loss, bad_epochs = va_loss, 0
-            torch.save({
-                "model_state_dict": model.state_dict(),
-                "input_features": INPUT_FEATURES,
-                "target_features": TARGET_FEATURES,
-                "in_dim": in_dim,
-                "out_dim": out_dim,
-                "config": params,
-            }, checkpoint_path)
-            print(" -> Đã lưu model tốt nhất.")
+        if np.isfinite(loss_va) and (loss_va < best_val):
+            best_val = loss_va
+            wait = 0
+            os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+            torch.save(model.state_dict(), ckpt_path)
         else:
-            bad_epochs += 1
-            if bad_epochs >= config.PATIENCE:
-                print("Early stopping do không cải thiện trên tập validation.")
+            wait += 1
+            if wait >= PATIENCE:
+                print(f"[{model_name}] Early stopping at epoch {epoch}. Best val={best_val:.6f}")
                 break
 
-    print(f"--- Hoàn tất huấn luyện model: {model_type.upper()} ---")
+    print(f"[{model_name}] Best checkpoint saved: {ckpt_path}")
+    return ckpt_path, (X_test, Y_test, last_test)
+
+
+def train(model_choice: str):
+    if model_choice == "all":
+        train_one_model("pytorch")
+        train_one_model("scratch")
+    else:
+        train_one_model(model_choice)

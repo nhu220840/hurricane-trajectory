@@ -1,254 +1,224 @@
-import pandas as pd
-import numpy as np
+# src/data_processing.py
+
 import pickle
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.pipeline import Pipeline
+import numpy as np
+import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from src import config  # <-- Đã import config
+from pathlib import Path
+
+from .config import (
+    RAW_CSV, PROCESSED_DIR, PROCESSED_NPZ,
+    NUMERIC_X, CATEGORICAL_X, FEATURES_X,
+    TARGET_Y, TIME_COLUMN, SID_COLUMN,
+    N_IN, N_OUT, PREPROCESSOR_X_PKL, SCALER_Y_PKL
+)
+
+# ================= Helpers =================
+
+def _sort_and_basic_clean(df: pd.DataFrame) -> pd.DataFrame:
+    required = set([SID_COLUMN, TIME_COLUMN, "lat", "lon"] + FEATURES_X)
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Thiếu cột bắt buộc trong RAW_CSV: {missing}")
+
+    df = df[list(required)].copy()
+    df = df.sort_values([SID_COLUMN, TIME_COLUMN]).reset_index(drop=True)
+
+    if "basin" in df.columns:
+        df["basin"] = df["basin"].astype(str).fillna("UNK")
+    return df
 
 
-# Hàm này giữ nguyên
-def _create_sequences(df_group, input_features, target_features, n_in, n_out):
-    """Tạo chuỗi thời gian cho một nhóm (cơn bão)"""
-    X, y = [], []
-    data = df_group[input_features].values.astype(np.float32)
-    target_data = df_group[target_features].values.astype(np.float32)
-
-    for i in range(len(data) - n_in - n_out + 1):
-        X.append(data[i: i + n_in])
-        y.append(target_data[i + n_in: i + n_in + n_out])  # y là tọa độ tuyệt đối
-
-    if not X:
-        return np.array([]), np.array([])
-
-    return np.array(X), np.array(y)
+def _coerce_numeric_columns(df: pd.DataFrame, numeric_cols) -> pd.DataFrame:
+    for c in numeric_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
 
 
-# --- HÀM _run_sklearn_pipeline (ĐÃ SỬA LỖI) ---
-def _run_sklearn_pipeline():
-    """Đọc CSV thô, chạy pipeline và lưu CSV đã xử lý."""
-    try:
-        df = pd.read_csv(config.RAW_DATA_PATH, keep_default_na=False, na_values=[' '])
-    except FileNotFoundError:
-        print(f"LỖI: Không tìm thấy file {config.RAW_DATA_PATH}")
-        return None, None
+def _interpolate_numeric_by_sid(df: pd.DataFrame, numeric_cols) -> pd.DataFrame:
+    numeric_cols = [c for c in numeric_cols if c in df.columns]
+    numeric_cols = list(dict.fromkeys(numeric_cols))  # khử trùng lặp
 
-    # Sử dụng hằng số từ config
-    df_clean = df[list(config.RAW_FEATURES_TO_KEEP.keys())].rename(columns=config.RAW_FEATURES_TO_KEEP)
+    def _interp_block(g):
+        g = g.copy()
+        for c in numeric_cols:
+            g[c] = pd.to_numeric(g[c], errors="coerce")
+            g[c] = g[c].interpolate(method="linear", limit_direction="both")
+        filled = g[numeric_cols].ffill().bfill()
+        g.loc[:, numeric_cols] = filled.values
+        return g
 
-    df_clean['time'] = pd.to_datetime(df_clean['time'])
+    return df.groupby(SID_COLUMN, group_keys=False, sort=False).apply(_interp_block)
 
-    # Ép kiểu cho cột số
-    for col in config.NUMERIC_FEATURES:
-        df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
 
-    # Ép kiểu cho cột phân loại (và điền giá trị 'UNKNOWN' nếu thiếu)
-    for col in config.CATEGORICAL_FEATURES:
-        df_clean[col] = df_clean[col].astype(str).fillna('UNKNOWN')
+def _final_impute_numeric(df: pd.DataFrame, numeric_cols) -> pd.DataFrame:
+    """
+    Sau interpolate/ffill/bfill vẫn có thể còn NaN nếu cả group trống.
+    Dùng median theo cột, nếu vẫn NaN thì điền 0.0.
+    """
+    cols = [c for c in numeric_cols if c in df.columns]
+    med = df[cols].median(numeric_only=True)
+    df.loc[:, cols] = df[cols].fillna(med)
+    df.loc[:, cols] = df[cols].fillna(0.0)
+    return df
 
-    df_clean = df_clean.sort_values(by=['sid', 'time'])
 
-    # === SỬA LỖI LEAKAGE (TỪ PHIÊN BẢN TRƯỚC) ===
-    print(f"Số dòng trước khi dropna (cho cột số): {len(df_clean)}")
-    # Chỉ drop nếu các cột SỐ bị thiếu
-    df_clean.dropna(subset=config.NUMERIC_FEATURES, inplace=True)
-    print(f"Số dòng sau khi dropna: {len(df_clean)}")
+def _add_deltas_per_sid(df: pd.DataFrame) -> pd.DataFrame:
+    df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+    df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+    df["delta_lat"] = df.groupby(SID_COLUMN)["lat"].shift(-1) - df["lat"]
+    df["delta_lon"] = df.groupby(SID_COLUMN)["lon"].shift(-1) - df["lon"]
+    df = df.dropna(subset=["delta_lat", "delta_lon"]).reset_index(drop=True)
+    return df
 
-    # === SỬA LỖI FutureWarning ===
-    # Thay thế các giá trị rỗng còn lại trong cột phân loại (nếu có)
-    for col in config.CATEGORICAL_FEATURES:
-        # Gán lại trực tiếp thay vì dùng inplace=True trên một lát cắt
-        df_clean[col] = df_clean[col].replace(r'^\s*$', 'UNKNOWN', regex=True)
-    # === KẾT THÚC SỬA LỖI FutureWarning ===
 
-    # === PIPELINE MỚI (Xử lý cả số và phân loại) ===
-    numeric_transformer = Pipeline(steps=[
-        ('scaler', MinMaxScaler())
-    ])
+def _encode_sid_to_index(df: pd.DataFrame) -> pd.DataFrame:
+    uniq = df[SID_COLUMN].astype(str).unique().tolist()
+    sid2idx = {s: i for i, s in enumerate(uniq)}
+    df["sid_idx"] = df[SID_COLUMN].astype(str).map(sid2idx).astype(int)
+    return df
 
-    categorical_transformer = Pipeline(steps=[
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-    ])
 
-    # Tạo preprocessor
+def _fit_x_preprocessor_and_transform(df: pd.DataFrame):
+    num_cols = [c for c in NUMERIC_X if c in df.columns]
+    cat_cols = [c for c in CATEGORICAL_X if c in df.columns]
+
     preprocessor = ColumnTransformer(
         transformers=[
-            ('num', numeric_transformer, config.NUMERIC_FEATURES),
-            ('cat', categorical_transformer, config.CATEGORICAL_FEATURES)
+            ("num", MinMaxScaler(), num_cols),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
         ],
-        remainder='passthrough'  # Giữ lại các cột 'sid', 'time', v.v.
+        remainder="drop",
     )
+    X_all = preprocessor.fit_transform(df[num_cols + cat_cols])
+    if hasattr(X_all, "toarray"):
+        X_all = X_all.toarray()
+    X_all = X_all.astype(np.float32)
 
-    full_pipeline = Pipeline(steps=[
-        ('preprocessor', preprocessor)
-    ])
-
-    # Fit và transform dữ liệu
-    data_transformed = full_pipeline.fit_transform(df_clean)
-
-    # === SỬA LỖI ValueError (Lấy tên cột mới) ===
-    # Lấy tên cột one-hot
-    ohe_feature_names = full_pipeline.named_steps['preprocessor'] \
-        .named_transformers_['cat'] \
-        .named_steps['onehot'] \
-        .get_feature_names_out(config.CATEGORICAL_FEATURES)
-
-    # Lấy tên các cột còn lại (remainder) một cách chính xác
-    # Đây là các cột không nằm trong NUMERIC hoặc CATEGORICAL
-    remainder_cols = [col for col in df_clean.columns if
-                      col not in config.NUMERIC_FEATURES and col not in config.CATEGORICAL_FEATURES]
-
-    # Tên cột cuối cùng (Phải khớp với thứ tự của ColumnTransformer)
-    # 1. Numeric, 2. Categorical, 3. Remainder
-    new_column_names = config.NUMERIC_FEATURES + list(ohe_feature_names) + remainder_cols
-    # === KẾT THÚC SỬA LỖI ValueError ===
-
-    # Các đặc trưng input cho mô hình
-    MODEL_INPUT_FEATURES = config.NUMERIC_FEATURES + list(ohe_feature_names)
-    print(f"Các đặc trưng đầu vào (features) mới: {MODEL_INPUT_FEATURES}")
-
-    # Tạo DataFrame
-    df_final = pd.DataFrame(data_transformed, columns=new_column_names)
-
-    # Sắp xếp lại (chỉ lấy các cột cần thiết cho bước sau)
-    final_cols_order = ['sid', 'time'] + MODEL_INPUT_FEATURES
-    df_final = df_final[final_cols_order]
-
-    # --- Lưu scaler và file CSV ---
-    config.PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Lưu toàn bộ pipeline (vì nó chứa cả scaler và one-hot)
-    with open(config.SCALER_PATH, 'wb') as f:
-        pickle.dump(full_pipeline, f)
-    print(f"Đã lưu toàn bộ pipeline (scaler + onehot) vào {config.SCALER_PATH}")
-
-    df_final.to_csv(config.PROCESSED_CSV_PATH, index=False)
-    print(f"Đã lưu dữ liệu đã xử lý vào {config.PROCESSED_CSV_PATH}")
-
-    return df_final, MODEL_INPUT_FEATURES
-
-
-# --- HÀM _convert_csv_to_npz (ĐÃ CẬP NHẬT ĐỂ CHIA THEO SID) ---
-def _convert_csv_to_npz(df, input_features):
-    """
-    Chuyển đổi DataFrame đã xử lý thành các chuỗi (X, y_delta)
-    VÀ chia train/valid/test theo SID.
-    """
-
-    # 1. Lấy danh sách SID duy nhất và xáo trộn
-    all_sids = df['sid'].unique()
-    np.random.seed(42)  # Thêm seed để đảm bảo chia ổn định
-    np.random.shuffle(all_sids)
-
-    # 2. Chia danh sách SID
-    n = len(all_sids)
-    n_train = int(n * 0.7)
-    n_valid = int(n * 0.15)
-
-    train_sids = set(all_sids[:n_train])
-    valid_sids = set(all_sids[n_train: n_train + n_valid])
-    test_sids = set(all_sids[n_train + n_valid:])
-
-    print(f"Tổng số cơn bão: {n}")
-    print(f"Train (SIDs): {len(train_sids)}, Valid (SIDs): {len(valid_sids)}, Test (SIDs): {len(test_sids)}")
-
-    # 3. Chuẩn bị các list để chứa dữ liệu
-    all_X_train, all_y_train = [], []
-    all_X_valid, all_y_valid = [], []
-    all_X_test, all_y_test = [], []
-
-    grouped = df.groupby('sid')
-
-    # Sử dụng hằng số từ config
     try:
-        lat_idx = input_features.index('lat')
-        lon_idx = input_features.index('lon')
-        coord_indices_in_X = [lat_idx, lon_idx]
-    except ValueError as e:
-        print(f"LỖI: 'lat' hoặc 'lon' không có trong input_features: {input_features}")
-        return
+        feature_names = preprocessor.get_feature_names_out().tolist()
+    except Exception:
+        feature_names = []
+    return X_all, preprocessor, feature_names
 
-    print("Đang tạo chuỗi (sequence) và tính toán deltas theo SID...")
-    for sid, group in grouped:
-        if len(group) < config.N_IN_STEPS + config.N_OUT_STEPS:
-            continue
 
-        # 1. Lấy X và y (tọa độ tuyệt đối) từ hàm
-        X, y_abs = _create_sequences(
-            group,
-            input_features,
-            config.TARGET_COORDS_FEATURES,  # <-- Sử dụng config
-            config.N_IN_STEPS,
-            config.N_OUT_STEPS
-        )
+def _fit_y_scaler_and_transform(df: pd.DataFrame):
+    scaler_y = MinMaxScaler()
+    Y_all = scaler_y.fit_transform(df[TARGET_Y].values.astype(np.float32)).astype(np.float32)
+    return Y_all, scaler_y
 
-        if X.shape[0] == 0:
-            continue
 
-        # 2. Tính toán Delta
-        last_coords_in_X = X[:, -1, coord_indices_in_X]
-        target_coords = np.squeeze(y_abs, axis=1)
-        y_delta = target_coords - last_coords_in_X
+def _make_windows(X_all, Y_all, sids_idx, lat_arr, lon_arr, N_in, N_out):
+    assert N_out == 1, "Code hiện tại giả định one-step (N_OUT=1)."
+    X_seq, Y_seq, last_obs_latlon, window_sid_idx = [], [], [], []
 
-        # 3. Reshape y_delta
-        y_delta = np.expand_dims(y_delta, axis=1)
+    uniq, idx = np.unique(sids_idx, return_index=True)
+    order = np.argsort(idx)
+    uniq, starts = uniq[order], idx[order]
+    ends = list(starts[1:]) + [len(sids_idx)]
 
-        # 4. Phân bổ X và y_delta vào đúng bộ (train/valid/test)
-        if sid in train_sids:
-            all_X_train.append(X)
-            all_y_train.append(y_delta)
-        elif sid in valid_sids:
-            all_X_valid.append(X)
-            all_y_valid.append(y_delta)
-        elif sid in test_sids:
-            all_X_test.append(X)
-            all_y_test.append(y_delta)
+    for sid_i, start, end in zip(uniq, starts, ends):
+        for t in range(start + N_in - 1, end - N_out):
+            Xw = X_all[t - (N_in - 1): t + 1, :]
+            Yw = Y_all[t: t + N_out, :]  # (1, 2)
+            Yw = Yw[0, :]                # -> (2,)
+            last_lat = lat_arr[t]
+            last_lon = lon_arr[t]
+            X_seq.append(Xw)
+            Y_seq.append(Yw)
+            last_obs_latlon.append([last_lat, last_lon])
+            window_sid_idx.append(sid_i)
 
-    # 5. Gộp (concatenate) các bộ lại
-    X_train = np.concatenate(all_X_train, axis=0) if all_X_train else np.array([])
-    y_train = np.concatenate(all_y_train, axis=0) if all_y_train else np.array([])
+    X_seq = np.asarray(X_seq, dtype=np.float32)
+    Y_seq = np.asarray(Y_seq, dtype=np.float32)
+    last_obs_latlon = np.asarray(last_obs_latlon, dtype=np.float32)
+    window_sid_idx = np.asarray(window_sid_idx, dtype=np.int32)
+    return X_seq, Y_seq, last_obs_latlon, window_sid_idx
 
-    X_valid = np.concatenate(all_X_valid, axis=0) if all_X_valid else np.array([])
-    y_valid = np.concatenate(all_y_valid, axis=0) if all_y_valid else np.array([])
 
-    X_test = np.concatenate(all_X_test, axis=0) if all_X_test else np.array([])
-    y_test = np.concatenate(all_y_test, axis=0) if all_y_test else np.array([])
-
-    if len(X_train) == 0:
-        print("LỖI: Không có dữ liệu huấn luyện. Kiểm tra lại logic chia SID.")
-        return
-
-    print(f"Tổng số chuỗi Train: {len(X_train)}")
-    print(f"Tổng số chuỗi Valid: {len(X_valid)}")
-    print(f"Tổng số chuỗi Test: {len(X_test)}")
-
-    # 6. Lưu vào file NPZ
-    np.savez_compressed(
-        config.PROCESSED_NPZ_PATH,
-        X_train=X_train, y_train=y_train,
-        X_valid=X_valid, y_valid=y_valid,
-        X_test=X_test, y_test=y_test,
-        INPUT_FEATURES=input_features,
-        TARGET_FEATURES=config.TARGET_DELTAS_FEATURES
+def _filter_invalid_windows(X, Y, last_obs, sid_idx):
+    """
+    Loại bỏ mọi cửa sổ có NaN/Inf trong X, Y, hoặc last_obs.
+    """
+    mask = (
+        np.isfinite(X).all(axis=(1, 2)) &
+        np.isfinite(Y).all(axis=1) &
+        np.isfinite(last_obs).all(axis=1)
     )
-    print(f"Đã lưu dữ liệu chuỗi (delta, chia theo SID) vào {config.PROCESSED_NPZ_PATH}")
+    dropped = int(X.shape[0] - mask.sum())
+    if dropped > 0:
+        print(f"[WARN] Dropped {dropped} / {X.shape[0]} windows due to NaN/Inf.")
+    return X[mask], Y[mask], last_obs[mask], sid_idx[mask]
 
+# ================= Public API =================
 
-# --- Hàm main để chạy từ main.py (Giữ nguyên) ---
-def run_data_pipeline():
-    """Hàm chính: Chạy toàn bộ pipeline tiền xử lý dữ liệu."""
-    print("--- Bắt đầu Bước 2: Tiền xử lý Dữ liệu ---")
+def process_and_save_npz():
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    if not RAW_CSV.exists():
+        raise FileNotFoundError(f"Không tìm thấy {RAW_CSV}")
 
-    # 1. Chạy Sklearn Pipeline
-    processed_df, feature_cols = _run_sklearn_pipeline()
+    df = pd.read_csv(RAW_CSV)
 
-    if processed_df is not None:
-        # 2. Chuyển đổi sang NPZ
-        _convert_csv_to_npz(processed_df, feature_cols)
+    # 1) Clean & sort
+    df = _sort_and_basic_clean(df)
 
-    print("--- Bước 2: Tiền xử lý Hoàn tất ---")
+    # 2) Coerce numeric
+    numeric_all = list(dict.fromkeys(list(NUMERIC_X) + ["lat", "lon"]))
+    df = _coerce_numeric_columns(df, numeric_all)
 
+    # lọc giá trị vô lý
+    df.loc[(df["lat"] < -90) | (df["lat"] > 90), "lat"] = np.nan
+    df.loc[(df["lon"] < -180) | (df["lon"] > 180), "lon"] = np.nan
 
-if __name__ == "__main__":
-    run_data_pipeline()
+    # 3) Interpolate by sid
+    numeric_for_interp = list(dict.fromkeys([c for c in NUMERIC_X if c in df.columns] + ["lat", "lon"]))
+    df = _interpolate_numeric_by_sid(df, numeric_cols=numeric_for_interp)
+
+    # 4) Impute cuối để đảm bảo không còn NaN ở numeric
+    df = _final_impute_numeric(df, numeric_for_interp)
+
+    # 5) Deltas
+    df = _add_deltas_per_sid(df)
+
+    # 6) sid index
+    df = _encode_sid_to_index(df)
+
+    # 7) X preprocessor & transform
+    X_all, preprocessor_x, x_feature_names = _fit_x_preprocessor_and_transform(df)
+
+    # 8) Y scaler & transform (delta)
+    Y_all, scaler_y = _fit_y_scaler_and_transform(df)
+
+    # 9) Windows
+    X_seq, Y_seq, last_obs, win_sid_idx = _make_windows(
+        X_all, Y_all, df["sid_idx"].values,
+        df["lat"].values, df["lon"].values,
+        N_IN, N_OUT
+    )
+
+    # 10) Lọc cửa sổ lỗi
+    X_seq, Y_seq, last_obs, win_sid_idx = _filter_invalid_windows(X_seq, Y_seq, last_obs, win_sid_idx)
+
+    # 11) Save npz
+    np.savez_compressed(
+        PROCESSED_NPZ,
+        X=X_seq, Y=Y_seq,
+        last_obs_latlon=last_obs,
+        window_sid_idx=win_sid_idx,
+        x_feature_names=np.array(x_feature_names, dtype=object),
+        target_y=np.array(TARGET_Y, dtype=object),
+        N_IN=np.array(N_IN),
+        N_OUT=np.array(N_OUT)
+    )
+
+    # 12) Save preprocessors
+    with open(PREPROCESSOR_X_PKL, "wb") as f:
+        pickle.dump(preprocessor_x, f)
+    with open(SCALER_Y_PKL, "wb") as f:
+        pickle.dump(scaler_y, f)
+
+    print(f"[OK] Saved processed arrays to {PROCESSED_NPZ}")
+    print(f"[OK] Saved X preprocessor to {PREPROCESSOR_X_PKL}")
+    print(f"[OK] Saved Y scaler to {SCALER_Y_PKL}")

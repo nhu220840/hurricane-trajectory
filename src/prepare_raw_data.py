@@ -1,73 +1,56 @@
 # src/prepare_raw_data.py
-import pandas as pd
-from src import config
 
-# Đây là các cột mà pipeline ở bước 2 (data_processing.py) cần
-# Dựa trên file 'ibtracs.last3years.list.v04r01.csv'
-COLUMNS_TO_KEEP = [
-    'SID',
-    'ISO_TIME',
-    'LAT',
-    'LON',
-    'WMO_WIND',
-    'WMO_PRES',
-    'STORM_SPEED',
-    'STORM_DIR',
-    'DIST2LAND',
-    'BASIN',
-]
+from pathlib import Path
+import pandas as pd
+
+from .config import RAW_DIR, RAW_CSV
+
+# GIỮ NGUYÊN CÁC FEATURE NÀY (mapping: cột gốc -> tên chuẩn)
+RAW_FEATURES_TO_KEEP = {
+    'SID': 'sid',
+    'ISO_TIME': 'time',
+    'LAT': 'lat',
+    'LON': 'lon',
+    'WMO_WIND': 'wind',
+    'WMO_PRES': 'pres',
+    'DIST2LAND': 'dist2land',  # feature mới
+    'BASIN': 'basin'           # feature mới (categorical)
+}
 
 def run_raw_data_preparation():
     """
-    Đọc file CSV thô (lớn) và cắt/lọc ra các cột cần thiết,
-    lưu thành 'ibtracs_track_ml.csv' để các bước sau sử dụng.
+    Bước 1: Từ file lớn gốc trong data/raw (ví dụ: ibtracs.last3years.list.v04r01.csv),
+    lọc và đổi tên cột về format ML gọn: sid, time, lat, lon, wind, pres, dist2land, basin.
+    Kết quả ghi ra data/raw/ibtracs_track_ml.csv
     """
-    print("--- Bắt đầu Bước 1: Chuẩn bị file CSV thô ---")
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Đảm bảo thư mục 'data/raw' tồn tại
-    config.RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    try:
-        print(f"Đang đọc file CSV lớn từ: {config.RAW_IBTRACS_FILE}")
-
-        # Đọc file CSV lớn
-        # Sử dụng các tham số giống như file preprocessing.py cũ để đảm bảo
-        # xử lý đúng các giá trị rỗng/khoảng trắng
-        df = pd.read_csv(
-            config.RAW_IBTRACS_FILE,
-            keep_default_na=False,
-            na_values=[' '],
-            low_memory=False  # Thêm vào để tối ưu khi đọc file lớn
-        )
-        print(f"Đã đọc xong file. Tổng số dòng: {len(df)}")
-
-    except FileNotFoundError:
-        print(f"LỖI: Không tìm thấy file data thô: {config.RAW_IBTRACS_FILE}")
-        print(f"Vui lòng đảm bảo file 'ibtracs.last3years.list.v04r01.csv' nằm trong thư mục '{config.RAW_DATA_DIR}'.")
-        return
-    except Exception as e:
-        print(f"LỖI khi đọc file: {e}")
+    # Bạn đặt tên file gốc IBTrACS ở đây
+    source_csv = RAW_DIR / "ibtracs.last3years.list.v04r01.csv"
+    if not source_csv.exists():
+        print(f"[WARN] Không tìm thấy {source_csv}. Bỏ qua bước chuẩn bị raw.")
         return
 
-    # Cắt lấy các cột cần thiết
-    try:
-        df_cut = df[COLUMNS_TO_KEEP]
-    except KeyError as e:
-        print(f"LỖI: Thiếu cột trong file CSV thô. Không tìm thấy cột: {e}")
-        print(f"Các cột có sẵn: {df.columns.to_list()}")
-        return
+    df = pd.read_csv(source_csv)
 
-    # Lưu file đã cắt (đây sẽ là input cho bước 2)
-    try:
-        df_cut.to_csv(config.RAW_DATA_PATH, index=False)
-        print(f"Đã lưu file đã cắt ({len(df_cut)} dòng) vào: {config.RAW_DATA_PATH}")
-    except Exception as e:
-        print(f"LỖI khi lưu file: {e}")
-        return
+    # Chuẩn hoá tên cột về UPPER để khớp key mapping, rồi map về tên chuẩn (lower)
+    col_upper_map = {c: c.upper() for c in df.columns}
+    df = df.rename(columns=col_upper_map)
 
-    print("--- Hoàn tất Bước 1 ---")
+    keep_cols_upper = [c for c in RAW_FEATURES_TO_KEEP.keys() if c in df.columns]
+    if not keep_cols_upper:
+        raise ValueError("Không khớp được cột nào trong RAW_FEATURES_TO_KEEP với file gốc.")
 
+    df = df[keep_cols_upper].copy()
+    df = df.rename(columns=RAW_FEATURES_TO_KEEP)
 
-if __name__ == "__main__":
-    # Cho phép chạy file này độc lập để test
-    run_raw_data_preparation()
+    # Kiểu dữ liệu cơ bản
+    # time giữ dạng string sortable (ISO), basin là string
+    if "basin" in df.columns:
+        df["basin"] = df["basin"].astype(str).fillna("UNK")
+
+    # Sắp xếp tương đối theo sid, time (nếu time có format ISO chuẩn)
+    df = df.sort_values(["sid", "time"]).reset_index(drop=True)
+
+    df.to_csv(RAW_CSV, index=False)
+    print(f"[OK] Wrote prepared raw CSV to {RAW_CSV}")

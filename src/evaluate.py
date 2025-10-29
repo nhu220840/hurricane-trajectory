@@ -1,124 +1,226 @@
-# src/evaluate.py (Phiên bản rút gọn)
+# src/evaluate.py
 
+import pickle
+from pathlib import Path
 import numpy as np
 import torch
-import pickle
-import pandas as pd
 import matplotlib.pyplot as plt
-# import folium # Tạm thời không cần
-from src import config, models, dataset
-from torch.utils.data import DataLoader
-from torchmetrics.regression import MeanAbsoluteError
-from torch import nn
-from src.train import run_epoch  # Import từ src.train
-# Import hàm _create_sequences từ data_processing
-from src.data_processing import _create_sequences
+
+from .config import (
+    PROCESSED_NPZ, SCALER_Y_PKL,
+    CHECKPOINT_LSTM_TORCH, CHECKPOINT_LSTM_SCRATCH,
+)
+from .models import LSTMForecaster, LSTMFromScratchForecaster
 
 
-# --- Hàm hỗ trợ tải model (Không đổi) ---
-def _load_model(model_type: str, device: torch.device):
-    if model_type == 'pytorch':
-        checkpoint_path = config.CKPT_PATH_PYTORCH
-        params = config.MODEL_PARAMS['pytorch']
-        ModelClass = models.LSTMForecaster
-    elif model_type == 'scratch':
-        checkpoint_path = config.CKPT_PATH_SCRATCH
-        params = config.MODEL_PARAMS['scratch']
-        ModelClass = models.LSTMFromScratchForecaster
-    else:
-        raise ValueError("Unknown model type")
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    from math import radians, sin, cos, asin, sqrt
+    p = radians
+    dlat = p(lat2 - lat1)
+    dlon = p(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(p(lat1)) * cos(p(lat2)) * sin(dlon/2)**2
+    return 2 * R * asin(sqrt(a))
+
+
+def _load_test_split():
+    data = np.load(PROCESSED_NPZ, allow_pickle=True)
+    X = data["X"]                          # (B, N_IN, d)
+    Y = data["Y"]                          # (B, 2) delta (scaled)
+    last_obs = data["last_obs_latlon"]     # (B, 2)
+    sid_idx = data["window_sid_idx"]       # (B,)
+
+    uniq = np.unique(sid_idx)
+    n = len(uniq)
+    n_test = max(1, int(n * 0.15))
+    test_sids = set(uniq[-n_test:])
+    m = np.isin(sid_idx, list(test_sids))
+
+    return X[m], Y[m], last_obs[m]
+
+
+def _safe_load_state_dict(ckpt_path: Path, device: str):
     try:
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    except FileNotFoundError:
-        print(f"LỖI: Không tìm thấy checkpoint: {checkpoint_path}")
-        print(f"Vui lòng huấn luyện model '{model_type}' trước.")
-        return None, None
-    model = ModelClass(
-        in_dim=checkpoint['in_dim'],
-        out_dim=checkpoint['out_dim'],
-        hidden=params['hidden'],
-        num_layers=params['num_layers'],
-        dropout=params['dropout']
-    ).to(device)
-    model.load_state_dict(checkpoint["model_state_dict"])
+        state = torch.load(ckpt_path, map_location=device, weights_only=True)  # PyTorch >= 2.4
+    except TypeError:
+        state = torch.load(ckpt_path, map_location=device)  # fallback
+    return state
+
+
+def _predict_errs_km_and_deltas(model, ckpt_path: Path,
+                                X_test: np.ndarray, Y_test: np.ndarray, last_obs: np.ndarray,
+                                scaler_y, device: str):
+    """
+    Trả về:
+      errs_km: (B,)
+      y_pred_deg: (B,2) delta dự đoán (độ) sau inverse scale
+      y_true_deg: (B,2) delta thật (độ)
+      lat_true, lon_true, lat_pred, lon_pred: (B,)
+    """
+    if not ckpt_path.exists():
+        return None
+
+    state = _safe_load_state_dict(ckpt_path, device=device)
+    model.load_state_dict(state)
+    model.to(device)
     model.eval()
-    return model, checkpoint
-
-
-# --- Hàm vẽ bản đồ (Đã xóa) ---
-# (Chúng ta sẽ thêm lại sau khi bạn sẵn sàng)
-
-
-# --- Hàm chính (Đã cập nhật) ---
-def run_evaluation_and_plot():
-    """
-    Chạy đánh giá chung trên tập test (dự đoán delta)
-    """
-    print("\n--- Bắt đầu Đánh giá và So sánh Model (Logic Delta) ---")
-
-    # === PHẦN 1: ĐÁNH GIÁ CHUNG TRÊN TẬP TEST (TỪ .NPZ) ===
-
-    try:
-        npz = np.load(config.PROCESSED_NPZ_PATH, allow_pickle=True)
-    except FileNotFoundError:
-        print(f"Lỗi: Không tìm thấy file {config.PROCESSED_NPZ_PATH}.")
-        return
-
-    X_test, y_test = npz["X_test"], npz["y_test"]  # y_test bây giờ là deltas
-    INPUT_FEATURES = list(npz["INPUT_FEATURES"])
-    TARGET_FEATURES = list(npz["TARGET_FEATURES"])  # Sẽ là ['delta_lat', 'delta_lon']
-
-    test_loader = DataLoader(dataset.StormSeqDataset(X_test, y_test), batch_size=config.BATCH_SIZE, shuffle=False)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    crit = nn.MSELoss()
-    mae_metric = MeanAbsoluteError().to(device)
-
-    model_pytorch, _ = _load_model('pytorch', device)
-    model_scratch, _ = _load_model('scratch', device)
-
-    if model_pytorch is None or model_scratch is None:
-        print("Thiếu model, không thể so sánh. Dừng lại.")
-        return
-
-    print("Đang đánh giá Model PyTorch (nn.LSTM)...")
-    test_loss_pt, test_mae_pt = run_epoch(test_loader, model_pytorch, crit, None, device, False, mae_metric)
-    print(f"[PyTorch]  Test MSE (delta): {test_loss_pt:.6f} | Test MAE (delta): {test_mae_pt:.6f}")
-
-    print("Đang đánh giá Model From-Scratch (ManualLSTM)...")
-    test_loss_sc, test_mae_sc = run_epoch(test_loader, model_scratch, crit, None, device, False, mae_metric)
-    print(f"[Scratch]  Test MSE (delta): {test_loss_sc:.6f} | Test MAE (delta): {test_mae_sc:.6f}")
-
-    # Vẽ biểu đồ thanh (Cập nhật nhãn)
-    print(f"\nĐang vẽ biểu đồ so sánh cho mẫu 0 (từ .npz)...")
-
-    # y_true bây giờ là delta
-    y_true_sample_for_bar = y_test[0].flatten()
-    x_sample_for_bar = torch.tensor(X_test[0], dtype=torch.float32).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        y_pred_pt_sample = model_pytorch(x_sample_for_bar).cpu().numpy().flatten()
-        y_pred_sc_sample = model_scratch(x_sample_for_bar).cpu().numpy().flatten()
+        y_pred_scaled = model(torch.tensor(X_test, dtype=torch.float32, device=device)).cpu().numpy()
 
-    labels = TARGET_FEATURES  # ['delta_lat', 'delta_lon']
-    x_pos = np.arange(len(labels))
-    width = 0.25
-    fig, ax = plt.subplots(figsize=(10, 6))
-    rects1 = ax.bar(x_pos - width, y_true_sample_for_bar, width, label='Ground Truth (Delta)', color='navy')
-    rects2 = ax.bar(x_pos, y_pred_pt_sample, width, label='PyTorch LSTM (Delta)', color='red')
-    rects3 = ax.bar(x_pos + width, y_pred_sc_sample, width, label='Scratch LSTM (Delta)', color='orange')
+    y_pred_deg = scaler_y.inverse_transform(y_pred_scaled)  # (B,2)
+    y_true_deg = scaler_y.inverse_transform(Y_test)         # (B,2)
 
-    ax.set_ylabel('Giá trị (Scaled Deltas)')  # <-- Đã cập nhật
-    ax.set_title(f'So sánh dự đoán Delta (1 bước) cho Mẫu Test 0')  # <-- Đã cập nhật
+    lat_true = last_obs[:, 0] + y_true_deg[:, 0]
+    lon_true = last_obs[:, 1] + y_true_deg[:, 1]
+    lat_pred = last_obs[:, 0] + y_pred_deg[:, 0]
+    lon_pred = last_obs[:, 1] + y_pred_deg[:, 1]
 
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(labels)
-    ax.legend()
-    ax.grid(axis='y', linestyle='--', alpha=0.7)
-    fig.tight_layout()
-    config.PLOT_DIR.mkdir(parents=True, exist_ok=True)
-    plt.savefig(config.COMPARISON_PLOT_PATH)
-    print(f"Đã lưu biểu đồ so sánh tại: {config.COMPARISON_PLOT_PATH}")
+    errs_km = np.array([
+        haversine_km(la_t, lo_t, la_p, lo_p)
+        for la_t, lo_t, la_p, lo_p in zip(lat_true, lon_true, lat_pred, lon_pred)
+    ])
+    return errs_km, y_pred_deg, y_true_deg, lat_true, lon_true, lat_pred, lon_pred
 
-    print("--- Hoàn tất Đánh giá (Logic Delta) ---")
-    print("\nPhần vẽ bản đồ tự hồi quy đã được tạm thời vô hiệu hóa.")
-    print("Sau khi huấn luyện xong, hãy cho tôi biết để tôi cung cấp logic vẽ bản đồ mới.")
+
+def _summary_and_print(name: str, errs_km: np.ndarray, y_pred_deg: np.ndarray, y_true_deg: np.ndarray):
+    mae_km = float(np.mean(np.abs(errs_km)))
+    mse_km = float(np.mean(errs_km**2))
+    mae_deg = float(np.mean(np.abs(y_pred_deg - y_true_deg)))
+    mse_deg = float(np.mean((y_pred_deg - y_true_deg)**2))
+    p50 = float(np.percentile(errs_km, 50))
+    p75 = float(np.percentile(errs_km, 75))
+    p90 = float(np.percentile(errs_km, 90))
+    print(f"[{name}] MAE_km={mae_km:.3f} | MSE_km={mse_km:.3f} | "
+          f"MAE_deg={mae_deg:.5f} | MSE_deg={mse_deg:.5f} | "
+          f"P50={p50:.2f}km | P75={p75:.2f}km | P90={p90:.2f}km")
+    return {"name": name, "mae_km": mae_km, "mse_km": mse_km,
+            "mae_deg": mae_deg, "mse_deg": mse_deg,
+            "p50_km": p50, "p75_km": p75, "p90_km": p90}
+
+
+def _plot_ecdf(errs_dict, out_png: Path):
+    """
+    ECDF: x = error (km), y = proportion ≤ x
+    """
+    plt.figure()
+    for label, errs in errs_dict.items():
+        if errs is None:
+            continue
+        e = np.sort(errs)
+        y = np.arange(1, len(e) + 1) / len(e)
+        plt.plot(e, y, label=label)
+    plt.xlabel("Error (km)")
+    plt.ylabel("Proportion ≤ error")
+    plt.title("ECDF of per-sample great-circle error (km) – test set")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"[OK] saved {out_png}")
+
+
+def _plot_sorted(errs_dict, out_png: Path):
+    """
+    Sorted error: x = sample rank (asc by error), y = error (km)
+    """
+    plt.figure()
+    for label, errs in errs_dict.items():
+        if errs is None:
+            continue
+        e = np.sort(errs)
+        x = np.arange(len(e))
+        plt.plot(x, e, label=label)
+    plt.xlabel("Sample rank (ascending by error)")
+    plt.ylabel("Error (km)")
+    plt.title("Sorted per-sample error (km) – test set")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"[OK] saved {out_png}")
+
+
+def evaluate():
+    # Load test
+    X_test, Y_test, last_test = _load_test_split()
+    with open(SCALER_Y_PKL, "rb") as f:
+        scaler_y = pickle.load(f)
+    input_size = X_test.shape[-1]
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    results = {}
+
+    # --- PyTorch model ---
+    errs_torch = None
+    if CHECKPOINT_LSTM_TORCH.exists():
+        m_torch = LSTMForecaster(input_size=input_size)
+        out = _predict_errs_km_and_deltas(m_torch, CHECKPOINT_LSTM_TORCH,
+                                          X_test, Y_test, last_test, scaler_y, device)
+        if out is not None:
+            errs_torch, y_pred_deg_t, y_true_deg_t, lat_true_t, lon_true_t, lat_pred_t, lon_pred_t = out
+            results["pytorch"] = _summary_and_print("pytorch", errs_torch, y_pred_deg_t, y_true_deg_t)
+    else:
+        print("[pytorch] Bỏ qua: không tìm thấy checkpoint.")
+
+    # --- Scratch model ---
+    errs_scratch = None
+    if CHECKPOINT_LSTM_SCRATCH.exists():
+        m_scratch = LSTMFromScratchForecaster(input_size=input_size)
+        out = _predict_errs_km_and_deltas(m_scratch, CHECKPOINT_LSTM_SCRATCH,
+                                          X_test, Y_test, last_test, scaler_y, device)
+        if out is not None:
+            errs_scratch, y_pred_deg_s, y_true_deg_s, lat_true_s, lon_true_s, lat_pred_s, lon_pred_s = out
+            results["scratch"] = _summary_and_print("scratch", errs_scratch, y_pred_deg_s, y_true_deg_s)
+    else:
+        print("[scratch] Bỏ qua: không tìm thấy checkpoint.")
+
+    # --- Baseline (persistence Δ=0) ---
+    y_true_deg = scaler_y.inverse_transform(Y_test)
+    lat_true = last_test[:, 0] + y_true_deg[:, 0]
+    lon_true = last_test[:, 1] + y_true_deg[:, 1]
+    lat_base = last_test[:, 0]
+    lon_base = last_test[:, 1]
+    errs_base = np.array([haversine_km(a, b, c, d) for a, b, c, d in zip(lat_true, lon_true, lat_base, lon_base)])
+    # in tóm tắt baseline
+    results["baseline"] = {
+        "name": "baseline",
+        "mae_km": float(np.mean(np.abs(errs_base))),
+        "mse_km": float(np.mean(errs_base**2)),
+        "p50_km": float(np.percentile(errs_base, 50)),
+        "p75_km": float(np.percentile(errs_base, 75)),
+        "p90_km": float(np.percentile(errs_base, 90)),
+    }
+    print("[baseline] "
+          f"MAE_km={results['baseline']['mae_km']:.3f} | "
+          f"MSE_km={results['baseline']['mse_km']:.3f} | "
+          f"P50={results['baseline']['p50_km']:.2f}km | "
+          f"P75={results['baseline']['p75_km']:.2f}km | "
+          f"P90={results['baseline']['p90_km']:.2f}km")
+
+    # --- Vẽ biểu đồ dễ đọc ---
+    plots_dir = Path("results/plots")
+    ecdf_png = plots_dir / "compare_ecdf_km.png"
+    sorted_png = plots_dir / "compare_sorted_error_km.png"
+
+    _plot_ecdf(
+        errs_dict={
+            "baseline": errs_base,
+            "LSTM PyTorch": errs_torch,
+            "LSTM Scratch": errs_scratch,
+        },
+        out_png=ecdf_png,
+    )
+
+    _plot_sorted(
+        errs_dict={
+            "baseline": errs_base,
+            "LSTM PyTorch": errs_torch,
+            "LSTM Scratch": errs_scratch,
+        },
+        out_png=sorted_png,
+    )
+
+    return results
