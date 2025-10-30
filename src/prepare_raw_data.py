@@ -31,7 +31,7 @@ def run_raw_data_preparation():
         print(f"[WARN] Không tìm thấy {source_csv}. Bỏ qua bước chuẩn bị raw.")
         return
 
-    df = pd.read_csv(source_csv)
+    df = pd.read_csv(source_csv, skiprows=[1])
 
     # Chuẩn hoá tên cột về UPPER để khớp key mapping, rồi map về tên chuẩn (lower)
     col_upper_map = {c: c.upper() for c in df.columns}

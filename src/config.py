@@ -7,7 +7,7 @@ DATA_DIR = Path("data")
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 MODELS_DIR = Path("models")
-PLOTS_DIR = Path("plots")
+PLOTS_DIR = Path("results/plots")
 
 RAW_CSV = RAW_DIR / "ibtracs_track_ml.csv"
 PROCESSED_NPZ = PROCESSED_DIR / "processed_data.npz"
