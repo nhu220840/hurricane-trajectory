@@ -84,6 +84,8 @@ def train_one_model(model_name: str):
     dl_te = DataLoader(ds_te, batch_size=BATCH_SIZE, shuffle=False, drop_last=False)
 
     input_size = X.shape[-1]
+    # THÊM DÒNG NÀY: Model từ notebook cần biết out_dim
+    out_dim = Y.shape[-1]
 
     if model_name == "pytorch":
         model = LSTMForecaster(
@@ -94,10 +96,12 @@ def train_one_model(model_name: str):
         )
         ckpt_path = CHECKPOINT_LSTM_TORCH
     elif model_name == "scratch":
+        # SỬA LẠI KHỐI NÀY ĐỂ KHỚP VỚI SIGNATURE CỦA MODEL TRONG NOTEBOOK
         model = LSTMFromScratchForecaster(
-            input_size=input_size,
-            hidden_size=LSTM_SCRATCH["hidden_size"],
+            in_dim=input_size,                      # SỬA: input_size -> in_dim
+            hidden=LSTM_SCRATCH["hidden_size"],     # SỬA: hidden_size -> hidden
             num_layers=LSTM_SCRATCH["num_layers"],
+            out_dim=out_dim,                        # THÊM: out_dim
             dropout=LSTM_SCRATCH["dropout"]
         )
         ckpt_path = CHECKPOINT_LSTM_SCRATCH

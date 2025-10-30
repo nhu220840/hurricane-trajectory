@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from .config import (
     PROCESSED_NPZ, SCALER_Y_PKL,
     CHECKPOINT_LSTM_TORCH, CHECKPOINT_LSTM_SCRATCH,
+    LSTM_SCRATCH  # <- Đảm bảo đã import LSTM_SCRATCH config
 )
 from .models import LSTMForecaster, LSTMFromScratchForecaster
 
@@ -19,32 +20,51 @@ def haversine_km(lat1, lon1, lat2, lon2):
     p = radians
     dlat = p(lat2 - lat1)
     dlon = p(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(p(lat1)) * cos(p(lat2)) * sin(dlon/2)**2
+    a = sin(dlat / 2) ** 2 + cos(p(lat1)) * cos(p(lat2)) * sin(dlon / 2) ** 2
     return 2 * R * asin(sqrt(a))
 
 
 def _load_test_split():
+    # SỬA LẠI HÀM NÀY ĐỂ GIỐNG LOGIC CHIA TRONG train.py (dùng seed)
     data = np.load(PROCESSED_NPZ, allow_pickle=True)
-    X = data["X"]                          # (B, N_IN, d)
-    Y = data["Y"]                          # (B, 2) delta (scaled)
-    last_obs = data["last_obs_latlon"]     # (B, 2)
-    sid_idx = data["window_sid_idx"]       # (B,)
+    X = data["X"]  # (B, N_IN, d)
+    Y = data["Y"]  # (B, 2) delta (scaled)
+    last_obs = data["last_obs_latlon"]  # (B, 2)
+    sid_idx = data["window_sid_idx"]  # (B,)
 
-    uniq = np.unique(sid_idx)
-    n = len(uniq)
-    n_test = max(1, int(n * 0.15))
-    test_sids = set(uniq[-n_test:])
-    m = np.isin(sid_idx, list(test_sids))
+    # Dùng logic chia giống hệt train.py
+    from .train import _split_by_sid, _filter_by_sid_idx, SEED
+    _, _, test_sids = _split_by_sid(sid_idx, seed=SEED)
 
-    return X[m], Y[m], last_obs[m]
+    X_test, m_te = _filter_by_sid_idx(X, sid_idx, test_sids)
+    Y_test = Y[m_te]
+    last_test = last_obs[m_te]
+
+    return X_test, Y_test, last_test
 
 
 def _safe_load_state_dict(ckpt_path: Path, device: str):
     try:
-        state = torch.load(ckpt_path, map_location=device, weights_only=True)  # PyTorch >= 2.4
-    except TypeError:
-        state = torch.load(ckpt_path, map_location=device)  # fallback
-    return state
+        # Thử load state_dict (nếu ckpt lưu state_dict)
+        state = torch.load(ckpt_path, map_location=device)
+        # Kiểm tra xem đây là state_dict hay là model đầy đủ (cũ)
+        if not isinstance(state, dict) or "model_state_dict" not in state:
+            # Đây là file state_dict thô từ repo gốc
+            return state
+
+        # Đây là file checkpoint mới từ notebook
+        if "model_state_dict" in state:
+            return state["model_state_dict"]
+        else:
+            return state  # Fallback
+
+    except Exception as e:
+        print(f"Lỗi khi load checkpoint {ckpt_path}: {e}")
+        # Thử fallback load model đầy đủ (ít an toàn hơn)
+        state = torch.load(ckpt_path, map_location=device, pickle_module=pickle)
+        if hasattr(state, 'state_dict'):  # Nếu là model
+            return state.state_dict()
+        return state  # Trả về bất cứ thứ gì load được
 
 
 def _predict_errs_km_and_deltas(model, ckpt_path: Path,
@@ -58,10 +78,20 @@ def _predict_errs_km_and_deltas(model, ckpt_path: Path,
       lat_true, lon_true, lat_pred, lon_pred: (B,)
     """
     if not ckpt_path.exists():
+        print(f"Không tìm thấy checkpoint: {ckpt_path}")
         return None
 
-    state = _safe_load_state_dict(ckpt_path, device=device)
-    model.load_state_dict(state)
+    try:
+        state_dict = _safe_load_state_dict(ckpt_path, device=device)
+        model.load_state_dict(state_dict)
+    except RuntimeError as e:
+        print(f"Lỗi khi nạp state_dict cho model {model.__class__.__name__}: {e}")
+        print("Có thể checkpoint không tương thích với kiến trúc model.")
+        return None
+    except Exception as e:
+        print(f"Lỗi không xác định khi load checkpoint {ckpt_path}: {e}")
+        return None
+
     model.to(device)
     model.eval()
 
@@ -69,7 +99,7 @@ def _predict_errs_km_and_deltas(model, ckpt_path: Path,
         y_pred_scaled = model(torch.tensor(X_test, dtype=torch.float32, device=device)).cpu().numpy()
 
     y_pred_deg = scaler_y.inverse_transform(y_pred_scaled)  # (B,2)
-    y_true_deg = scaler_y.inverse_transform(Y_test)         # (B,2)
+    y_true_deg = scaler_y.inverse_transform(Y_test)  # (B,2)
 
     lat_true = last_obs[:, 0] + y_true_deg[:, 0]
     lon_true = last_obs[:, 1] + y_true_deg[:, 1]
@@ -85,9 +115,9 @@ def _predict_errs_km_and_deltas(model, ckpt_path: Path,
 
 def _summary_and_print(name: str, errs_km: np.ndarray, y_pred_deg: np.ndarray, y_true_deg: np.ndarray):
     mae_km = float(np.mean(np.abs(errs_km)))
-    mse_km = float(np.mean(errs_km**2))
+    mse_km = float(np.mean(errs_km ** 2))
     mae_deg = float(np.mean(np.abs(y_pred_deg - y_true_deg)))
-    mse_deg = float(np.mean((y_pred_deg - y_true_deg)**2))
+    mse_deg = float(np.mean((y_pred_deg - y_true_deg) ** 2))
     p50 = float(np.percentile(errs_km, 50))
     p75 = float(np.percentile(errs_km, 75))
     p90 = float(np.percentile(errs_km, 90))
@@ -149,6 +179,7 @@ def evaluate():
     with open(SCALER_Y_PKL, "rb") as f:
         scaler_y = pickle.load(f)
     input_size = X_test.shape[-1]
+    out_dim = Y_test.shape[-1]  # <-- THÊM DÒNG NÀY
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     results = {}
@@ -156,6 +187,7 @@ def evaluate():
     # --- PyTorch model ---
     errs_torch = None
     if CHECKPOINT_LSTM_TORCH.exists():
+        # Model Pytorch gốc chỉ cần input_size
         m_torch = LSTMForecaster(input_size=input_size)
         out = _predict_errs_km_and_deltas(m_torch, CHECKPOINT_LSTM_TORCH,
                                           X_test, Y_test, last_test, scaler_y, device)
@@ -168,7 +200,14 @@ def evaluate():
     # --- Scratch model ---
     errs_scratch = None
     if CHECKPOINT_LSTM_SCRATCH.exists():
-        m_scratch = LSTMFromScratchForecaster(input_size=input_size)
+        # SỬA LẠI KHỐI NÀY ĐỂ KHỚP VỚI SIGNATURE CỦA MODEL TRONG NOTEBOOK
+        m_scratch = LSTMFromScratchForecaster(
+            in_dim=input_size,  # SỬA: input_size -> in_dim
+            hidden=LSTM_SCRATCH["hidden_size"],  # SỬA/THÊM:
+            num_layers=LSTM_SCRATCH["num_layers"],  # SỬA/THÊM:
+            out_dim=out_dim,  # THÊM: out_dim
+            dropout=LSTM_SCRATCH["dropout"]  # SỬA/THÊM:
+        )
         out = _predict_errs_km_and_deltas(m_scratch, CHECKPOINT_LSTM_SCRATCH,
                                           X_test, Y_test, last_test, scaler_y, device)
         if out is not None:
@@ -188,7 +227,7 @@ def evaluate():
     results["baseline"] = {
         "name": "baseline",
         "mae_km": float(np.mean(np.abs(errs_base))),
-        "mse_km": float(np.mean(errs_base**2)),
+        "mse_km": float(np.mean(errs_base ** 2)),
         "p50_km": float(np.percentile(errs_base, 50)),
         "p75_km": float(np.percentile(errs_base, 75)),
         "p90_km": float(np.percentile(errs_base, 90)),
