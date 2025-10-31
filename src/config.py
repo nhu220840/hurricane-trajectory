@@ -12,13 +12,13 @@ PLOTS_DIR = Path("results/plots")
 RAW_CSV = RAW_DIR / "ibtracs_track_ml.csv"
 PROCESSED_NPZ = PROCESSED_DIR / "processed_data.npz"
 PREPROCESSOR_X_PKL = PROCESSED_DIR / "preprocessor_x.pkl"  # ColumnTransformer (num scaler + cat OHE)
-SCALER_Y_PKL = PROCESSED_DIR / "scaler_y.pkl"              # scaler riêng cho y (delta)
+SCALER_Y_PKL = PROCESSED_DIR / "scaler_y.pkl"              # separate scaler for y (delta)
 
 CHECKPOINT_LSTM_TORCH = MODELS_DIR / "best_lstm_pytorch.pt"
 CHECKPOINT_LSTM_SCRATCH = MODELS_DIR / "best_lstm_scratch.pt"
 
 # ========== Data & Features ==========
-# Giữ đúng các feature bạn yêu cầu (đã rename về chữ thường trong prepare_raw_data)
+# Keep the exact features you requested (renamed to lowercase in prepare_raw_data)
 # - Numeric: lat, lon, wind, pres, dist2land
 # - Categorical: basin
 TIME_COLUMN = "time"
@@ -27,10 +27,10 @@ SID_COLUMN = "sid"
 NUMERIC_X = ["lat", "lon", "wind", "pres", "dist2land"]
 CATEGORICAL_X = ["basin"]
 
-# Tổng hợp cho tiện tham chiếu
+# Aggregated for easy reference
 FEATURES_X = NUMERIC_X + CATEGORICAL_X
 
-# CHỐT: dự đoán delta
+# FINAL: predict delta
 TARGET_MODE = "delta"
 TARGET_Y = ["delta_lat", "delta_lon"]
 
@@ -63,4 +63,4 @@ LSTM_SCRATCH = {
 }
 
 # ========== Misc ==========
-DEVICE = "cuda"  # tự rơi về cpu nếu không có cuda
+DEVICE = "cuda"  # falls back to cpu if cuda is not available

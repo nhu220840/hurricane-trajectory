@@ -5,10 +5,10 @@ import torch
 import torch.nn as nn
 
 # ------------------- PyTorch LSTM Forecaster -------------------
-# (Class này được giữ nguyên từ file models.py gốc)
+# (This class is kept unchanged from the original models.py file)
 class LSTMForecaster(nn.Module):
     """
-    LSTM chuẩn PyTorch, dự đoán (Δlat, Δlon) => output_size=2
+    Standard PyTorch LSTM, predicts (Δlat, Δlon) => output_size=2
     """
     def __init__(self, input_size, hidden_size=128, num_layers=2, dropout=0.1):
         super().__init__()
@@ -28,31 +28,31 @@ class LSTMForecaster(nn.Module):
         return y
 
 
-# ------------------- Scratch LSTM (TỪ NOTEBOOK REbuildLSTM.ipynb) -------------------
-# (Hai class dưới đây được sao chép từ cell 8 và 10 của notebook)
+# ------------------- Scratch LSTM (FROM NOTEBOOK REbuildLSTM.ipynb) -------------------
+# (The two classes below are copied from cells 8 and 10 of the notebook)
 
 class _ManualLSTMCell(nn.Module):
     def __init__(self, in_dim: int, hidden: int):
         super().__init__()
         self.hidden = hidden
-        # U*: input->hidden (có bias)
+        # U*: input->hidden (with bias)
         self.Uf = nn.Linear(in_dim, hidden, bias=True)
         self.Ui = nn.Linear(in_dim, hidden, bias=True)
         self.Uo = nn.Linear(in_dim, hidden, bias=True)
         self.Ug = nn.Linear(in_dim, hidden, bias=True)
-        # W*: hidden->hidden (không bias)
+        # W*: hidden->hidden (no bias)
         self.Wf = nn.Linear(hidden, hidden, bias=False)
         self.Wi = nn.Linear(hidden, hidden, bias=False)
         self.Wo = nn.Linear(hidden, hidden, bias=False)
         self.Wg = nn.Linear(hidden, hidden, bias=False)
 
-        # Khởi tạo
+        # Initialization
         for lin in [self.Uf, self.Ui, self.Uo, self.Ug]:
             nn.init.xavier_uniform_(lin.weight)
             nn.init.zeros_(lin.bias)
         for lin in [self.Wf, self.Wi, self.Wo, self.Wg]:
             nn.init.orthogonal_(lin.weight)
-        # Forget bias dương để khuyến khích "nhớ" lúc đầu
+        # Positive forget bias to encourage "remembering" at the start
         with torch.no_grad():
             self.Uf.bias.fill_(1.0)
 
@@ -68,14 +68,14 @@ class _ManualLSTMCell(nn.Module):
 
 class LSTMFromScratchForecaster(nn.Module):
     """
-    Stacked LSTM từ _ManualLSTMCell. Lấy h ở timestep cuối -> Linear head ra out_dim.
-    (Logic từ cell 10 - REbuildLSTM.ipynb)
+    Stacked LSTM from _ManualLSTMCell. Get h at the last timestep -> Linear head to out_dim.
+    (Logic from cell 10 - REbuildLSTM.ipynb)
     """
     def __init__(self, in_dim, hidden=20, num_layers=2, out_dim=2, dropout=0.2):
         super().__init__()
         self.hidden = hidden
         self.num_layers = num_layers
-        # Đổi tên 'input_size' thành 'in_dim' để khớp với notebook
+        # Rename 'input_size' to 'in_dim' to match notebook
         self.dropout_p = dropout if num_layers > 1 else 0.0
 
         self.cells = nn.ModuleList([
@@ -102,8 +102,8 @@ class LSTMFromScratchForecaster(nn.Module):
             for l, cell in enumerate(self.cells):
                 h_l, c_l = cell(inp, hs[l], cs[l])
                 hs[l], cs[l] = h_l, c_l
-                # dropout giữa các layer (không áp cho layer cuối)
+                # dropout between layers (not applied to the last layer)
                 inp = self.dropout(h_l) if (l < self.num_layers - 1) else h_l
 
-        last_h = hs[-1]          # [B, H] tại timestep cuối
+        last_h = hs[-1]          # [B, H] at the last timestep
         return self.head(last_h) # [B, out_dim]

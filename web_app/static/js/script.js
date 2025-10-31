@@ -1,102 +1,102 @@
 // static/js/script.js
 
-// Biến toàn cục để giữ bản đồ
+// Global variable to hold the map
 let map = null;
 
-// Hàm để vẽ bản đồ (sẽ được gọi khi có dữ liệu)
+// Function to draw the map (will be called when data is available)
 function drawMap(data) {
-    // Nếu bản đồ chưa được tạo, hãy tạo nó
+    // If the map hasn't been created, create it
     if (!map) {
-        map = L.map('map').setView(data.start_point, 7); // Phóng to vào điểm bắt đầu
+        map = L.map('map').setView(data.start_point, 7); // Zoom in on the start point
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
     } else {
-        // Nếu bản đồ đã tồn tại, chỉ cần xóa các lớp cũ và di chuyển
+        // If the map already exists, just clear old layers and move
         map.eachLayer(layer => {
-            if (!!layer.toGeoJSON) { // Xóa mọi thứ trừ tile layer
+            if (!!layer.toGeoJSON) { // Remove everything except the tile layer
                 map.removeLayer(layer);
             }
         });
         map.setView(data.start_point, 7);
     }
 
-    // 1. Vẽ 10 điểm lịch sử (Xám)
+    // 1. Draw 10 history points (Gray)
     L.polyline(data.history_coords, { color: 'gray', weight: 3, opacity: 0.7 })
-        .bindTooltip("Lịch sử (10 điểm)")
+        .bindTooltip("History (10 points)")
         .addTo(map);
 
-    // 2. Điểm bắt đầu (Xanh lá)
+    // 2. Start point (Green)
     L.marker(data.start_point)
-        .bindTooltip("Điểm 10 (Bắt đầu dự đoán)")
+        .bindTooltip("Point 10 (Prediction Start)")
         .addTo(map);
 
-    // 3. Điểm "Sự thật" (Xanh Navy)
+    // 3. "Ground Truth" point (Navy)
     L.circleMarker(data.true_point, { radius: 7, color: 'navy', fillColor: 'navy', fillOpacity: 0.8 })
-        .bindTooltip(`<b>Sự thật (Điểm 11)</b><br>${data.true_point.map(c => c.toFixed(2)).join(', ')}`)
+        .bindTooltip(`<b>Ground Truth (Point 11)</b><br>${data.true_point.map(c => c.toFixed(2)).join(', ')}`)
         .addTo(map);
     L.polyline([data.start_point, data.true_point], { color: 'navy', weight: 2 })
         .addTo(map);
 
-    // 4. Dự đoán PyTorch (Đỏ)
+    // 4. PyTorch Prediction (Red)
     L.circleMarker(data.pred_torch, { radius: 7, color: 'red', fillColor: 'red', fillOpacity: 0.8 })
-        .bindTooltip(`<b>Dự đoán PyTorch</b><br>${data.pred_torch.map(c => c.toFixed(2)).join(', ')}`)
+        .bindTooltip(`<b>PyTorch Prediction</b><br>${data.pred_torch.map(c => c.toFixed(2)).join(', ')}`)
         .addTo(map);
     L.polyline([data.start_point, data.pred_torch], { color: 'red', weight: 2, dashArray: '5, 5' })
         .addTo(map);
 
-    // 5. Dự đoán Scratch (Cam)
+    // 5. Scratch Prediction (Orange)
     L.circleMarker(data.pred_scratch, { radius: 7, color: 'orange', fillColor: 'orange', fillOpacity: 0.8 })
-        .bindTooltip(`<b>Dự đoán Scratch</b><br>${data.pred_scratch.map(c => c.toFixed(2)).join(', ')}`)
+        .bindTooltip(`<b>Scratch Prediction</b><br>${data.pred_scratch.map(c => c.toFixed(2)).join(', ')}`)
         .addTo(map);
     L.polyline([data.start_point, data.pred_scratch], { color: 'orange', weight: 2, dashArray: '5, 5' })
         .addTo(map);
 }
 
-// Hàm để chạy khi trang web tải xong
+// Function to run when the web page is loaded
 document.addEventListener("DOMContentLoaded", function() {
     const selectBox = document.getElementById("sample-select");
     const predictButton = document.getElementById("predict-button");
 
-    // 1. Tải danh sách Case Studies từ API
+    // 1. Load the list of Case Studies from the API
     fetch("/api/get_test_samples")
         .then(response => response.json())
         .then(samples => {
-            selectBox.innerHTML = ""; // Xóa "Đang tải..."
+            selectBox.innerHTML = ""; // Clear "Loading..."
             samples.forEach(sample => {
                 const option = document.createElement("option");
                 option.value = sample.id;
                 option.textContent = sample.name;
                 selectBox.appendChild(option);
             });
-            predictButton.disabled = false; // Kích hoạt nút bấm
+            predictButton.disabled = false; // Enable the button
         })
         .catch(err => {
-            console.error("Lỗi tải samples:", err);
-            selectBox.innerHTML = "<option>Lỗi tải danh sách</option>";
+            console.error("Error loading samples:", err);
+            selectBox.innerHTML = "<option>Error loading list</option>";
         });
 
-    // 2. Thêm sự kiện cho nút "Chạy Demo"
+    // 2. Add event listener for the "Run Demo" button
     predictButton.addEventListener("click", function() {
         const sampleId = selectBox.value;
         if (!sampleId) return;
-        
-        predictButton.textContent = "Đang dự đoán...";
+
+        predictButton.textContent = "Predicting...";
         predictButton.disabled = true;
 
-        // Gọi API dự đoán
-        fetch("/api/predict?sample_id=${sampleId}")
+        // Call prediction API
+        fetch(`/api/predict?sample_id=${sampleId}`) // Corrected template literal
             .then(response => response.json())
             .then(data => {
-                // Khi có dữ liệu, gọi hàm vẽ bản đồ
+                // When data is received, call the map drawing function
                 drawMap(data);
-                predictButton.textContent = "Chạy Demo";
+                predictButton.textContent = "Run Demo";
                 predictButton.disabled = false;
             })
             .catch(err => {
-                console.error("Lỗi dự đoán:", err);
-                alert("Đã xảy ra lỗi khi dự đoán.");
-                predictButton.textContent = "Chạy Demo";
+                console.error("Prediction error:", err);
+                alert("An error occurred during prediction.");
+                predictButton.textContent = "Run Demo";
                 predictButton.disabled = false;
             });
     });

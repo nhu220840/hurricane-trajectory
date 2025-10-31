@@ -59,7 +59,7 @@ def train_one_model(model_name: str):
 
     # guard: if still bad
     if not (np.isfinite(X).all() and np.isfinite(Y).all()):
-        raise ValueError("X/Y vẫn có NaN/Inf sau tiền xử lý. Kiểm tra lại data_processing.py.")
+        raise ValueError("X/Y still contain NaN/Inf after preprocessing. Check data_processing.py.")
 
     train_sids, val_sids, test_sids = _split_by_sid(sid_idx, seed=SEED)
 
@@ -84,7 +84,7 @@ def train_one_model(model_name: str):
     dl_te = DataLoader(ds_te, batch_size=BATCH_SIZE, shuffle=False, drop_last=False)
 
     input_size = X.shape[-1]
-    # THÊM DÒNG NÀY: Model từ notebook cần biết out_dim
+    # ADD THIS LINE: Model from notebook needs to know out_dim
     out_dim = Y.shape[-1]
 
     if model_name == "pytorch":
@@ -96,17 +96,17 @@ def train_one_model(model_name: str):
         )
         ckpt_path = CHECKPOINT_LSTM_TORCH
     elif model_name == "scratch":
-        # SỬA LẠI KHỐI NÀY ĐỂ KHỚP VỚI SIGNATURE CỦA MODEL TRONG NOTEBOOK
+        # REVISE THIS BLOCK TO MATCH THE MODEL SIGNATURE IN THE NOTEBOOK
         model = LSTMFromScratchForecaster(
-            in_dim=input_size,                      # SỬA: input_size -> in_dim
-            hidden=LSTM_SCRATCH["hidden_size"],     # SỬA: hidden_size -> hidden
+            in_dim=input_size,                      # FIX: input_size -> in_dim
+            hidden=LSTM_SCRATCH["hidden_size"],     # FIX: hidden_size -> hidden
             num_layers=LSTM_SCRATCH["num_layers"],
-            out_dim=out_dim,                        # THÊM: out_dim
+            out_dim=out_dim,                        # ADD: out_dim
             dropout=LSTM_SCRATCH["dropout"]
         )
         ckpt_path = CHECKPOINT_LSTM_SCRATCH
     else:
-        raise ValueError("model_name phải là 'pytorch' hoặc 'scratch'.")
+        raise ValueError("model_name must be 'pytorch' or 'scratch'.")
 
     model = model.to(use_device)
 

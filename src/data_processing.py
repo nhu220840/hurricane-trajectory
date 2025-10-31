@@ -20,7 +20,7 @@ def _sort_and_basic_clean(df: pd.DataFrame) -> pd.DataFrame:
     required = set([SID_COLUMN, TIME_COLUMN, "lat", "lon"] + FEATURES_X)
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(f"Thiếu cột bắt buộc trong RAW_CSV: {missing}")
+        raise ValueError(f"Missing required columns in RAW_CSV: {missing}")
 
     df = df[list(required)].copy()
     df = df.sort_values([SID_COLUMN, TIME_COLUMN]).reset_index(drop=True)
@@ -39,7 +39,7 @@ def _coerce_numeric_columns(df: pd.DataFrame, numeric_cols) -> pd.DataFrame:
 
 def _interpolate_numeric_by_sid(df: pd.DataFrame, numeric_cols) -> pd.DataFrame:
     numeric_cols = [c for c in numeric_cols if c in df.columns]
-    numeric_cols = list(dict.fromkeys(numeric_cols))  # khử trùng lặp
+    numeric_cols = list(dict.fromkeys(numeric_cols))  # remove duplicates
 
     def _interp_block(g):
         g = g.copy()
@@ -55,8 +55,8 @@ def _interpolate_numeric_by_sid(df: pd.DataFrame, numeric_cols) -> pd.DataFrame:
 
 def _final_impute_numeric(df: pd.DataFrame, numeric_cols) -> pd.DataFrame:
     """
-    Sau interpolate/ffill/bfill vẫn có thể còn NaN nếu cả group trống.
-    Dùng median theo cột, nếu vẫn NaN thì điền 0.0.
+    After interpolate/ffill/bfill, NaNs might still exist if an entire group is empty.
+    Use column-wise median, if still NaN, fill with 0.0.
     """
     cols = [c for c in numeric_cols if c in df.columns]
     med = df[cols].median(numeric_only=True)
@@ -111,7 +111,7 @@ def _fit_y_scaler_and_transform(df: pd.DataFrame):
 
 
 def _make_windows(X_all, Y_all, sids_idx, lat_arr, lon_arr, N_in, N_out):
-    assert N_out == 1, "Code hiện tại giả định one-step (N_OUT=1)."
+    assert N_out == 1, "Current code assumes one-step (N_OUT=1)."
     X_seq, Y_seq, last_obs_latlon, window_sid_idx = [], [], [], []
 
     uniq, idx = np.unique(sids_idx, return_index=True)
@@ -140,7 +140,7 @@ def _make_windows(X_all, Y_all, sids_idx, lat_arr, lon_arr, N_in, N_out):
 
 def _filter_invalid_windows(X, Y, last_obs, sid_idx):
     """
-    Loại bỏ mọi cửa sổ có NaN/Inf trong X, Y, hoặc last_obs.
+    Remove any windows with NaN/Inf in X, Y, or last_obs.
     """
     mask = (
         np.isfinite(X).all(axis=(1, 2)) &
@@ -157,7 +157,7 @@ def _filter_invalid_windows(X, Y, last_obs, sid_idx):
 def process_and_save_npz():
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     if not RAW_CSV.exists():
-        raise FileNotFoundError(f"Không tìm thấy {RAW_CSV}")
+        raise FileNotFoundError(f"{RAW_CSV} not found")
 
     df = pd.read_csv(RAW_CSV)
 
@@ -168,7 +168,7 @@ def process_and_save_npz():
     numeric_all = list(dict.fromkeys(list(NUMERIC_X) + ["lat", "lon"]))
     df = _coerce_numeric_columns(df, numeric_all)
 
-    # lọc giá trị vô lý
+    # filter absurd values
     df.loc[(df["lat"] < -90) | (df["lat"] > 90), "lat"] = np.nan
     df.loc[(df["lon"] < -180) | (df["lon"] > 180), "lon"] = np.nan
 
@@ -176,7 +176,7 @@ def process_and_save_npz():
     numeric_for_interp = list(dict.fromkeys([c for c in NUMERIC_X if c in df.columns] + ["lat", "lon"]))
     df = _interpolate_numeric_by_sid(df, numeric_cols=numeric_for_interp)
 
-    # 4) Impute cuối để đảm bảo không còn NaN ở numeric
+    # 4) Final impute to ensure no NaNs remain in numeric columns
     df = _final_impute_numeric(df, numeric_for_interp)
 
     # 5) Deltas
@@ -198,7 +198,7 @@ def process_and_save_npz():
         N_IN, N_OUT
     )
 
-    # 10) Lọc cửa sổ lỗi
+    # 10) Filter invalid windows
     X_seq, Y_seq, last_obs, win_sid_idx = _filter_invalid_windows(X_seq, Y_seq, last_obs, win_sid_idx)
 
     # 11) Save npz

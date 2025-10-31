@@ -1,19 +1,19 @@
-# main.py (wrapper ở thư mục gốc repo)
+# main.py (wrapper in the repo root)
 
 import argparse
 import sys
 from pathlib import Path
 
-# Bảo đảm import được gói src/ khi chạy từ thư mục gốc
+# Ensure the src/ package can be imported when run from the root directory
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.append(str(REPO_ROOT))
 
-# Import các module trong package src
+# Import modules from the src package
 from src import prepare_raw_data, data_processing, train, evaluate
 
-# (Tuỳ chọn) cố định seed ở mức "wrapper"
+# (Optional) set seed at the "wrapper" level
 try:
-    from src.utils import set_seed  # nếu bạn có utils.py
+    from src.utils import set_seed  # if you have utils.py
 except Exception:
     import os, random, numpy as np, torch
 
@@ -30,7 +30,7 @@ except Exception:
 
 
 def main():
-    # Cố định seed sớm (không bắt buộc, nhưng tốt)
+    # Set seed early (not mandatory, but good practice)
     set_seed(42)
 
     parser = argparse.ArgumentParser(description="Hurricane trajectory pipeline (delta mode)")
@@ -38,33 +38,33 @@ def main():
     parser.add_argument(
         "--prepare-raw-data",
         action="store_true",
-        help="Bước 1: cắt/đổi tên cột từ IBTrACS gốc -> data/raw/ibtracs_track_ml.csv",
+        help="Step 1: cut/rename columns from original IBTrACS -> data/raw/ibtracs_track_ml.csv",
     )
     parser.add_argument(
         "--process-data",
         action="store_true",
-        help="Bước 2: tiền xử lý -> data/processed/processed_data.npz (+preprocessor/scaler)",
+        help="Step 2: preprocess -> data/processed/processed_data.npz (+preprocessor/scaler)",
     )
     parser.add_argument(
         "--train",
         nargs="+",
         choices=["pytorch", "scratch", "all"],
-        help="Bước 3: huấn luyện: 'pytorch', 'scratch', hoặc 'all'. Có thể truyền nhiều: --train pytorch scratch",
+        help="Step 3: train: 'pytorch', 'scratch', or 'all'. Can pass multiple: --train pytorch scratch",
     )
     parser.add_argument(
         "--evaluate",
         action="store_true",
-        help="Bước 4: đánh giá checkpoint đã train (in MAE/MSE theo km & theo độ)",
+        help="Step 4: evaluate trained checkpoint (prints MAE/MSE in km & degrees)",
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Chạy lần lượt 1→4 (prepare, process, train all, evaluate).",
+        help="Run steps 1→4 sequentially (prepare, process, train all, evaluate).",
     )
 
     args = parser.parse_args()
 
-    # Nếu dùng --all thì bật hết các bước
+    # If --all is used, enable all steps
     if args.all:
         args.prepare_raw_data = True
         args.process_data = True
@@ -73,23 +73,23 @@ def main():
 
     ran_any = False
 
-    # ---- Bước 1: chuẩn bị dữ liệu thô gọn ----
+    # ---- Step 1: Prepare concise raw data ----
     if args.prepare_raw_data:
         ran_any = True
         prepare_raw_data.run_raw_data_preparation()
 
-    # ---- Bước 2: xử lý & tạo NPZ ----
+    # ---- Step 2: Process & create NPZ ----
     if args.process_data:
         ran_any = True
-        # TÊN HÀM CHUẨN TRONG src/data_processing.py
+        # STANDARD FUNCTION NAME IN src/data_processing.py
         data_processing.process_and_save_npz()
 
-    # ---- Bước 3: huấn luyện ----
+    # ---- Step 3: Training ----
     if args.train:
         ran_any = True
-        # TÊN HÀM CHUẨN TRONG src/train.py: train(model_choice)
-        # - 'all' => train cả 2
-        # - 'pytorch' hoặc 'scratch' => train từng cái
+        # STANDARD FUNCTION NAME IN src/train.py: train(model_choice)
+        # - 'all' => train both
+        # - 'pytorch' or 'scratch' => train individually
         if "all" in args.train:
             train.train("all")
         else:
@@ -98,15 +98,15 @@ def main():
             if "scratch" in args.train:
                 train.train("scratch")
 
-    # ---- Bước 4: đánh giá ----
+    # ---- Step 4: Evaluation ----
     if args.evaluate:
         ran_any = True
-        # TÊN HÀM CHUẨN TRONG src/evaluate.py
+        # STANDARD FUNCTION NAME IN src/evaluate.py
         results = evaluate.evaluate()
         if results is not None:
             print("[Results]", results)
 
-    # Nếu không truyền gì, in help
+    # If no arguments are given, print help
     if not ran_any:
         parser.print_help()
 

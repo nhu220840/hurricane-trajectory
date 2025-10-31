@@ -2,21 +2,21 @@ import torch
 import pickle
 import numpy as np
 import warnings
-import sys  # (MỚI) Thêm để sửa đổi system path
-from flask import Flask, render_template, jsonify, request, url_for  # (MỚI) Thêm url_for
+import sys  # (NEW) Added to modify the system path
+from flask import Flask, render_template, jsonify, request, url_for  # (NEW) Added url_for
 from pathlib import Path
 
-# --- (MỚI) CẤU HÌNH ĐƯỜNG DẪN ---
-# 1. Thêm thư mục gốc của dự án vào system path
+# --- (NEW) PATH CONFIGURATION ---
+# 1. Add the project root directory to the system path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
-# 2. Định nghĩa đường dẫn đến các thư mục chứa "artifacts"
+# 2. Define paths to directories containing "artifacts"
 DATA_PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
-# --- KẾT THÚC PHẦN MỚI ---
+# --- END OF NEW SECTION ---
 
-# (THAY ĐỔI) Import từ src/
+# (CHANGED) Import from src/
 from src.models import LSTMForecaster, LSTMFromScratchForecaster
 from src.config import (
     LSTM_TORCH, LSTM_SCRATCH,
@@ -42,37 +42,37 @@ def _filter_by_sid_idx(arr, sid_idx, keep_sids):
     return arr[mask], mask
 
 
-# --- KHỞI TẠO ỨNG DỤNG FLASK ---
-# Flask sẽ tự động tìm 'templates' và 'static' trong cùng thư mục (web_app/)
+# --- FLASK APP INITIALIZATION ---
+# Flask will automatically find 'templates' and 'static' in the same directory (web_app/)
 app = Flask(__name__)
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Sử dụng thiết bị: {device}")
+print(f"Using device: {device}")
 
-# --- BIẾN TOÀN CỤC ĐỂ GIỮ CÁC ARTIFACTS ---
+# --- GLOBAL VARIABLE TO HOLD ARTIFACTS ---
 artifacts = {}
 
 
-# (THAY ĐỔI) Cập nhật hàm load_artifacts
+# (CHANGED) Update load_artifacts function
 def load_artifacts():
-    """Tải models, scalers, và dữ liệu test vào RAM."""
-    print("Bắt đầu tải artifacts...")
+    """Load models, scalers, and test data into RAM."""
+    print("Starting to load artifacts...")
 
-    # 1. Tải data
+    # 1. Load data
     data_path = DATA_PROCESSED_DIR / "processed_data.npz"
     if not data_path.exists():
-        print(f"LỖI: Không tìm thấy file {data_path}")
-        print("Hãy chắc chắn rằng bạn đã chạy processing (ví dụ: src/data_processing.py)")
+        print(f"ERROR: File not found {data_path}")
+        print("Please make sure you have run processing (e.g., src/data_processing.py)")
         return False
 
     data = np.load(data_path, allow_pickle=True)
     X_all, Y_all, last_obs_all, sid_idx_all = data["X"], data["Y"], data["last_obs_latlon"], data["window_sid_idx"]
 
-    # 2. Tải scalers
+    # 2. Load scalers
     scaler_y_path = DATA_PROCESSED_DIR / "scaler_y.pkl"
     preprocessor_x_path = DATA_PROCESSED_DIR / "preprocessor_x.pkl"
 
     if not scaler_y_path.exists() or not preprocessor_x_path.exists():
-        print(f"LỖI: Không tìm thấy file scaler trong {DATA_PROCESSED_DIR}")
+        print(f"ERROR: Scaler file not found in {DATA_PROCESSED_DIR}")
         return False
 
     with open(scaler_y_path, "rb") as f:
@@ -80,25 +80,25 @@ def load_artifacts():
     with open(preprocessor_x_path, "rb") as f:
         preprocessor_x = pickle.load(f)
 
-    # Tách riêng num_scaler (quan trọng)
+    # Separate num_scaler (important)
     artifacts["num_scaler"] = preprocessor_x.named_transformers_['num']
     artifacts["num_features_count"] = len(NUMERIC_X)
 
-    # Lấy index của lat/lon
+    # Get indices for lat/lon
     indices = {}
     for feat in ['lat', 'lon']:
         if feat in NUMERIC_X:
             indices[feat] = NUMERIC_X.index(feat)
     artifacts["feat_indices"] = indices
 
-    # 3. Chia tập test (chỉ lấy data test)
+    # 3. Split test set (only get test data)
     _, _, test_sids = _split_by_sid(sid_idx_all, seed=SEED)
     X_test, m_te = _filter_by_sid_idx(X_all, sid_idx_all, test_sids)
     artifacts["X_test"] = X_test
     artifacts["last_obs_test"] = last_obs_all[m_te]
-    print(f"Đã tải {len(X_test)} mẫu test vào RAM.")
+    print(f"Loaded {len(X_test)} test samples into RAM.")
 
-    # 4. Tải models
+    # 4. Load models
     input_size = X_test.shape[-1]
     out_dim = Y_all.shape[-1]
 
@@ -112,8 +112,8 @@ def load_artifacts():
     ckpt_scratch = MODELS_DIR / "best_lstm_scratch.pt"
 
     if not ckpt_torch.exists() or not ckpt_scratch.exists():
-        print(f"LỖI: Không tìm thấy file model trong {MODELS_DIR}")
-        print("Hãy chắc chắn rằng bạn đã chạy training (ví dụ: src/train.py)")
+        print(f"ERROR: Model file not found in {MODELS_DIR}")
+        print("Please make sure you have run training (e.g., src/train.py)")
         return False
 
     with warnings.catch_warnings():
@@ -124,52 +124,52 @@ def load_artifacts():
     artifacts["model_torch"] = model_torch.to(device).eval()
     artifacts["model_scratch"] = model_scratch.to(device).eval()
 
-    print("...Tải artifacts thành công!")
-    return True  # (MỚI) Thêm return True
+    print("...Artifacts loaded successfully!")
+    return True  # (NEW) Added return True
 
 
-# === CÁC ROUTE (ĐƯỜNG DẪN) CỦA WEB ===
-# (Toàn bộ phần này được giữ nguyên từ code của bạn)
+# === WEB ROUTES ===
+# (This entire section is kept from your original code)
 @app.route("/")
 def index():
-    """Phục vụ trang web chính (index.html)."""
+    """Serve the main web page (index.html)."""
     return render_template("index.html")
 
 
 @app.route("/api/get_test_samples")
 def get_test_samples():
-    """Gửi một danh sách các ID mẫu test để người dùng chọn."""
-    # Ví dụ: Gửi 5 mẫu ngẫu nhiên
+    """Send a list of test sample IDs for the user to choose."""
+    # Example: Send 5 random samples
     rng = np.random.default_rng()
     sample_indices = rng.choice(len(artifacts["X_test"]), 5, replace=False)
 
-    # Lấy tọa độ bắt đầu để hiển thị
+    # Get starting coordinates for display
     samples = []
     for idx in sample_indices:
         lat, lon = artifacts["last_obs_test"][idx]
         samples.append({
             "id": int(idx),
-            "name": f"Case Study #{idx} (Bắt đầu tại {lat:.1f}, {lon:.1f})"
+            "name": f"Case Study #{idx} (Starting at {lat:.1f}, {lon:.1f})"
         })
     return jsonify(samples)
 
 
 @app.route("/api/predict")
 def predict():
-    """Chạy dự đoán cho một mẫu và trả về tọa độ (JSON)."""
-    # Lấy sample_id từ URL (ví dụ: /api/predict?sample_id=150)
+    """Run prediction for a sample and return coordinates (JSON)."""
+    # Get sample_id from URL (e.g., /api/predict?sample_id=150)
     sample_id = request.args.get("sample_id", default=150, type=int)
 
-    print(f"Nhận yêu cầu dự đoán cho sample_id: {sample_id}")
+    print(f"Received prediction request for sample_id: {sample_id}")
 
-    # Lấy dữ liệu đã tải sẵn
+    # Get preloaded data
     input_window_scaled = artifacts["X_test"][sample_id]
     start_coord = artifacts["last_obs_test"][sample_id]
-    # (MỚI) Thêm kiểm tra biên
+    # (NEW) Add boundary check
     true_coord_11th = artifacts["last_obs_test"][sample_id + 1] if sample_id + 1 < len(
         artifacts["last_obs_test"]) else start_coord
 
-    # Lấy 10 điểm lịch sử (để vẽ)
+    # Get 10 history points (for plotting)
     num_scaler = artifacts["num_scaler"]
     num_count = artifacts["num_features_count"]
     idx_lat = artifacts["feat_indices"]['lat']
@@ -179,7 +179,7 @@ def predict():
     history_unscaled_nums = num_scaler.inverse_transform(history_scaled_nums)
     history_coords = list(zip(history_unscaled_nums[:, idx_lat], history_unscaled_nums[:, idx_lon]))
 
-    # Chạy dự đoán
+    # Run prediction
     input_tensor = torch.tensor(input_window_scaled, dtype=torch.float32).unsqueeze(0).to(device)
     scaler_y = artifacts["scaler_y"]
 
@@ -192,19 +192,19 @@ def predict():
         delta_scratch = artifacts["model_scratch"](input_tensor)
         delta_deg_scratch = scaler_y.inverse_transform(delta_scratch.cpu().numpy())[0]
 
-    # Tính toán tọa độ dự đoán
+    # Calculate predicted coordinates
     pred_coord_torch_np = (start_coord[0] + delta_deg_torch[0], start_coord[1] + delta_deg_torch[1])
     pred_coord_scratch_np = (start_coord[0] + delta_deg_scratch[0], start_coord[1] + delta_deg_scratch[1])
 
-    # 8. Chuyển đổi TẤT CẢ sang kiểu dữ liệu Python cơ bản (float)
-    #    để jsonify có thể xử lý
+    # 8. Convert ALL to basic Python data types (float)
+    #    so jsonify can handle it
     history_coords_py = [[float(lat), float(lon)] for lat, lon in history_coords]
     start_point_py = [float(start_coord[0]), float(start_coord[1])]
     true_point_py = [float(true_coord_11th[0]), float(true_coord_11th[1])]
     pred_torch_py = [float(pred_coord_torch_np[0]), float(pred_coord_torch_np[1])]
     pred_scratch_py = [float(pred_coord_scratch_np[0]), float(pred_coord_scratch_np[1])]
 
-    # 9. Trả về tất cả tọa độ dưới dạng JSON
+    # 9. Return all coordinates as JSON
     return jsonify({
         "history_coords": history_coords_py,
         "start_point": start_point_py,
@@ -214,10 +214,10 @@ def predict():
     })
 
 
-# --- CHẠY ỨNG DỤNG ---
+# --- RUN APPLICATION ---
 if __name__ == "__main__":
-    # (MỚI) Thêm kiểm tra artifacts đã tải thành công chưa
+    # (NEW) Add check if artifacts loaded successfully
     if load_artifacts():
         app.run(debug=True, port=5000)
     else:
-        print("Không thể khởi động server do thiếu artifacts.")
+        print("Could not start server due to missing artifacts.")
