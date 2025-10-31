@@ -218,6 +218,6 @@ def predict():
 if __name__ == "__main__":
     # (NEW) Add check if artifacts loaded successfully
     if load_artifacts():
-        app.run(debug=True, port=5000)
+        app.run(debug=True, port=5500)
     else:
         print("Could not start server due to missing artifacts.")

@@ -52,14 +52,14 @@ CLIP_NORM = 1.0
 LSTM_TORCH = {
     "hidden_size": 128,
     "num_layers": 2,
-    "dropout": 0.1,
+    "dropout": 0.2,
 }
 
 # LSTM From Scratch
 LSTM_SCRATCH = {
     "hidden_size": 128,
-    "num_layers": 1,
-    "dropout": 0.0,
+    "num_layers": 2,
+    "dropout": 0.2,
 }
 
 # ========== Misc ==========
