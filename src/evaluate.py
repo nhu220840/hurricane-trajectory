@@ -9,13 +9,13 @@ import matplotlib.pyplot as plt
 from .config import (
     PROCESSED_NPZ, SCALER_Y_PKL,
     CHECKPOINT_LSTM_TORCH, CHECKPOINT_LSTM_SCRATCH,
-    LSTM_SCRATCH  # <- Ensure LSTM_SCRATCH config is imported
+    LSTM_SCRATCH, LSTM_TORCH  # (NEW) Import LSTM_TORCH for consistency
 )
 from .models import LSTMForecaster, LSTMFromScratchForecaster
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0
+    R = 6371.0  # Earth radius in kilometers
     from math import radians, sin, cos, asin, sqrt
     p = radians
     dlat = p(lat2 - lat1)
@@ -25,25 +25,34 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 def _load_test_split():
-    # REVISE THIS FUNCTION TO MATCH SPLITTING LOGIC in train.py (use seed)
-    data = np.load(PROCESSED_NPZ, allow_pickle=True)
-    X = data["X"]  # (B, N_IN, d)
-    Y = data["Y"]  # (B, 2) delta (scaled)
-    last_obs = data["last_obs_latlon"]  # (B, 2)
-    sid_idx = data["window_sid_idx"]  # (B,)
-
-    # Use the exact same splitting logic as train.py
-    from .train import _split_by_sid, _filter_by_sid_idx, SEED
-    _, _, test_sids = _split_by_sid(sid_idx, seed=SEED)
-
-    X_test, m_te = _filter_by_sid_idx(X, sid_idx, test_sids)
-    Y_test = Y[m_te]
-    last_test = last_obs[m_te]
+    """
+    (REVISED) Loads the pre-split test arrays from the .npz file.
+    """
+    print(f"[Load] Loading pre-split test data from {PROCESSED_NPZ}...")
+    try:
+        data = np.load(PROCESSED_NPZ, allow_pickle=True)
+        X_test = data["X_test"]
+        Y_test = data["Y_test"]
+        last_test = data["last_obs_test"]
+        print(f"[Load] Test data shape: {X_test.shape}")
+    except FileNotFoundError:
+        print(f"ERROR: File not found: {PROCESSED_NPZ}")
+        print("Please run the data processing step first (e.g., python main.py --process-data)")
+        return None, None, None  # Return None to fail gracefully
+    except KeyError as e:
+        print(f"ERROR: Missing expected array {e} in {PROCESSED_NPZ}.")
+        print("The .npz file might be old or corrupted. Please re-run data processing.")
+        return None, None, None  # Return None to fail gracefully
 
     return X_test, Y_test, last_test
 
 
+# (REMOVED) _split_by_sid - No longer needed, splitting is done in data_processing.py
+# (REMOVED) _filter_by_sid_idx - No longer needed
+
+
 def _safe_load_state_dict(ckpt_path: Path, device: str):
+    # (This function is unchanged)
     try:
         # Try loading state_dict (if ckpt saved state_dict)
         state = torch.load(ckpt_path, map_location=device)
@@ -52,7 +61,7 @@ def _safe_load_state_dict(ckpt_path: Path, device: str):
             # This is a raw state_dict file from the original repo
             return state
 
-        # This is a new checkpoint file from the notebook
+        # This is a new checkpoint file
         if "model_state_dict" in state:
             return state["model_state_dict"]
         else:
@@ -61,10 +70,14 @@ def _safe_load_state_dict(ckpt_path: Path, device: str):
     except Exception as e:
         print(f"Error loading checkpoint {ckpt_path}: {e}")
         # Try fallback loading the full model (less safe)
-        state = torch.load(ckpt_path, map_location=device, pickle_module=pickle)
-        if hasattr(state, 'state_dict'):  # If it's a model
-            return state.state_dict()
-        return state  # Return whatever was loaded
+        try:
+            state = torch.load(ckpt_path, map_location=device, pickle_module=pickle)
+            if hasattr(state, 'state_dict'):  # If it's a model
+                return state.state_dict()
+            return state  # Return whatever was loaded
+        except Exception as e2:
+            print(f"Fallback loading failed: {e2}")
+            return None
 
 
 def _predict_errs_km_and_deltas(model, ckpt_path: Path,
@@ -77,12 +90,16 @@ def _predict_errs_km_and_deltas(model, ckpt_path: Path,
       y_true_deg: (B,2) true delta (degrees)
       lat_true, lon_true, lat_pred, lon_pred: (B,)
     """
+    # (This function is unchanged, but with added safety checks)
     if not ckpt_path.exists():
         print(f"Checkpoint not found: {ckpt_path}")
         return None
 
     try:
         state_dict = _safe_load_state_dict(ckpt_path, device=device)
+        if state_dict is None:
+            print(f"Failed to load state dict from {ckpt_path}")
+            return None
         model.load_state_dict(state_dict)
     except RuntimeError as e:
         print(f"Error loading state_dict for model {model.__class__.__name__}: {e}")
@@ -114,6 +131,7 @@ def _predict_errs_km_and_deltas(model, ckpt_path: Path,
 
 
 def _summary_and_print(name: str, errs_km: np.ndarray, y_pred_deg: np.ndarray, y_true_deg: np.ndarray):
+    # (This function is unchanged)
     mae_km = float(np.mean(np.abs(errs_km)))
     mse_km = float(np.mean(errs_km ** 2))
     mae_deg = float(np.mean(np.abs(y_pred_deg - y_true_deg)))
@@ -132,6 +150,7 @@ def _summary_and_print(name: str, errs_km: np.ndarray, y_pred_deg: np.ndarray, y
 def _plot_ecdf(errs_dict, out_png: Path):
     """
     ECDF: x = error (km), y = proportion ≤ x
+    (This function is unchanged)
     """
     plt.figure()
     for label, errs in errs_dict.items():
@@ -154,6 +173,7 @@ def _plot_ecdf(errs_dict, out_png: Path):
 def _plot_sorted(errs_dict, out_png: Path):
     """
     Sorted error: x = sample rank (asc by error), y = error (km)
+    (This function is unchanged)
     """
     plt.figure()
     for label, errs in errs_dict.items():
@@ -174,39 +194,56 @@ def _plot_sorted(errs_dict, out_png: Path):
 
 
 def evaluate():
+    print("[Evaluate] Starting evaluation...")
     # Load test data
     X_test, Y_test, last_test = _load_test_split()
-    with open(SCALER_Y_PKL, "rb") as f:
-        scaler_y = pickle.load(f)
+    if X_test is None:
+        print("[Evaluate] Could not load test data. Aborting evaluation.")
+        return None
+
+    try:
+        with open(SCALER_Y_PKL, "rb") as f:
+            scaler_y = pickle.load(f)
+        print(f"[Load] Loaded Y scaler from {SCALER_Y_PKL}")
+    except FileNotFoundError:
+        print(f"ERROR: Scaler file not found: {SCALER_Y_PKL}. Aborting.")
+        return None
+
     input_size = X_test.shape[-1]
-    out_dim = Y_test.shape[-1]  # <-- ADD THIS LINE
+    out_dim = Y_test.shape[-1]
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[Evaluate] Using device: {device}")
 
     results = {}
 
     # --- PyTorch model ---
     errs_torch = None
     if CHECKPOINT_LSTM_TORCH.exists():
-        # Original PyTorch model only needs input_size
-        m_torch = LSTMForecaster(input_size=input_size)
+        print(f"[Evaluate] Loading model 'pytorch' from {CHECKPOINT_LSTM_TORCH}")
+        m_torch = LSTMForecaster(
+            input_size=input_size,
+            hidden_size=LSTM_TORCH["hidden_size"],
+            num_layers=LSTM_TORCH["num_layers"],
+            dropout=LSTM_TORCH["dropout"]
+        )
         out = _predict_errs_km_and_deltas(m_torch, CHECKPOINT_LSTM_TORCH,
                                           X_test, Y_test, last_test, scaler_y, device)
         if out is not None:
             errs_torch, y_pred_deg_t, y_true_deg_t, lat_true_t, lon_true_t, lat_pred_t, lon_pred_t = out
             results["pytorch"] = _summary_and_print("pytorch", errs_torch, y_pred_deg_t, y_true_deg_t)
     else:
-        print("[pytorch] Skipping: checkpoint not found.")
+        print(f"[pytorch] Skipping: checkpoint not found at {CHECKPOINT_LSTM_TORCH}")
 
     # --- Scratch model ---
     errs_scratch = None
     if CHECKPOINT_LSTM_SCRATCH.exists():
-        # REVISE THIS BLOCK TO MATCH THE MODEL SIGNATURE IN THE NOTEBOOK
+        print(f"[Evaluate] Loading model 'scratch' from {CHECKPOINT_LSTM_SCRATCH}")
         m_scratch = LSTMFromScratchForecaster(
-            in_dim=input_size,  # FIX: input_size -> in_dim
-            hidden=LSTM_SCRATCH["hidden_size"],  # FIX/ADD:
-            num_layers=LSTM_SCRATCH["num_layers"],  # FIX/ADD:
-            out_dim=out_dim,  # ADD: out_dim
-            dropout=LSTM_SCRATCH["dropout"]  # FIX/ADD:
+            in_dim=input_size,
+            hidden=LSTM_SCRATCH["hidden_size"],
+            num_layers=LSTM_SCRATCH["num_layers"],
+            out_dim=out_dim,
+            dropout=LSTM_SCRATCH["dropout"]
         )
         out = _predict_errs_km_and_deltas(m_scratch, CHECKPOINT_LSTM_SCRATCH,
                                           X_test, Y_test, last_test, scaler_y, device)
@@ -214,16 +251,17 @@ def evaluate():
             errs_scratch, y_pred_deg_s, y_true_deg_s, lat_true_s, lon_true_s, lat_pred_s, lon_pred_s = out
             results["scratch"] = _summary_and_print("scratch", errs_scratch, y_pred_deg_s, y_true_deg_s)
     else:
-        print("[scratch] Skipping: checkpoint not found.")
+        print(f"[scratch] Skipping: checkpoint not found at {CHECKPOINT_LSTM_SCRATCH}")
 
     # --- Baseline (persistence Δ=0) ---
+    print("[Evaluate] Calculating baseline (persistence) model...")
     y_true_deg = scaler_y.inverse_transform(Y_test)
     lat_true = last_test[:, 0] + y_true_deg[:, 0]
     lon_true = last_test[:, 1] + y_true_deg[:, 1]
-    lat_base = last_test[:, 0]
+    lat_base = last_test[:, 0]  # Baseline prediction is no change (delta=0)
     lon_base = last_test[:, 1]
     errs_base = np.array([haversine_km(a, b, c, d) for a, b, c, d in zip(lat_true, lon_true, lat_base, lon_base)])
-    # print baseline summary
+
     results["baseline"] = {
         "name": "baseline",
         "mae_km": float(np.mean(np.abs(errs_base))),
@@ -240,13 +278,14 @@ def evaluate():
           f"P90={results['baseline']['p90_km']:.2f}km")
 
     # --- Plot easy-to-read charts ---
+    print("[Evaluate] Generating plots...")
     plots_dir = Path("results/plots")
     ecdf_png = plots_dir / "compare_ecdf_km.png"
     sorted_png = plots_dir / "compare_sorted_error_km.png"
 
     _plot_ecdf(
         errs_dict={
-            "baseline": errs_base,
+            "Baseline (Persistence)": errs_base,
             "LSTM PyTorch": errs_torch,
             "LSTM Scratch": errs_scratch,
         },
@@ -255,11 +294,12 @@ def evaluate():
 
     _plot_sorted(
         errs_dict={
-            "baseline": errs_base,
+            "Baseline (Persistence)": errs_base,
             "LSTM PyTorch": errs_torch,
             "LSTM Scratch": errs_scratch,
         },
         out_png=sorted_png,
     )
 
+    print("[Evaluate] Evaluation complete.")
     return results

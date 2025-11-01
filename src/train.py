@@ -21,24 +21,14 @@ def set_seed(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    # (NEW) Add deterministic settings for reproducibility
+    if torch.cuda.is_available():
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
-def _split_by_sid(window_sid_idx, train_ratio=0.7, val_ratio=0.15, seed=SEED):
-    uniq = np.unique(window_sid_idx)
-    rng = np.random.default_rng(seed)
-    rng.shuffle(uniq)
-    n = len(uniq)
-    n_train = int(n * train_ratio)
-    n_val = int(n * val_ratio)
-    train_sids = set(uniq[:n_train])
-    val_sids = set(uniq[n_train:n_train+n_val])
-    test_sids = set(uniq[n_train+n_val:])
-    return train_sids, val_sids, test_sids
-
-
-def _filter_by_sid_idx(arr, sid_idx, keep_sids):
-    mask = np.isin(sid_idx, list(keep_sids))
-    return arr[mask], mask
+# (REMOVED) _split_by_sid - This logic is now in data_processing.py
+# (REMOVED) _filter_by_sid_idx - This logic is now in data_processing.py
 
 
 def _finite_batch(Xb, Yb):
@@ -50,30 +40,40 @@ def _finite_batch(Xb, Yb):
 def train_one_model(model_name: str):
     set_seed(SEED)
     use_device = "cuda" if (torch.cuda.is_available() and DEVICE == "cuda") else "cpu"
+    print(f"[{model_name}] Using device: {use_device}")
 
-    data = np.load(PROCESSED_NPZ, allow_pickle=True)
-    X = data["X"]                          # (B, N_IN, d)
-    Y = data["Y"]                          # (B, 2) delta (scaled)
-    last_obs = data["last_obs_latlon"]     # (B, 2)
-    sid_idx = data["window_sid_idx"]       # (B,)
+    # (REVISED) Load the pre-split data
+    print(f"[Load] Loading pre-split data from {PROCESSED_NPZ}...")
+    try:
+        data = np.load(PROCESSED_NPZ, allow_pickle=True)
+        X_train = data["X_train"]
+        Y_train = data["Y_train"]
+        last_tr = data["last_obs_train"]
 
-    # guard: if still bad
-    if not (np.isfinite(X).all() and np.isfinite(Y).all()):
-        raise ValueError("X/Y still contain NaN/Inf after preprocessing. Check data_processing.py.")
+        X_val = data["X_val"]
+        Y_val = data["Y_val"]
+        last_val = data["last_obs_val"]
 
-    train_sids, val_sids, test_sids = _split_by_sid(sid_idx, seed=SEED)
+        X_test = data["X_test"]
+        Y_test = data["Y_test"]
+        last_test = data["last_obs_test"]
+        print(f"[Load] Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
+    except FileNotFoundError:
+        print(f"ERROR: File not found: {PROCESSED_NPZ}")
+        print("Please run the data processing step first (e.g., python main.py --process-data)")
+        return None, None
+    except KeyError as e:
+        print(f"ERROR: Missing expected array {e} in {PROCESSED_NPZ}.")
+        print("The .npz file might be old or corrupted. Please re-run data processing.")
+        return None, None
 
-    X_train, m_tr = _filter_by_sid_idx(X, sid_idx, train_sids)
-    Y_train = Y[m_tr]
-    last_tr = last_obs[m_tr]
+    # (REMOVED) Splitting logic is no longer needed here.
 
-    X_val, m_val = _filter_by_sid_idx(X, sid_idx, val_sids)
-    Y_val = Y[m_val]
-    last_val = last_obs[m_val]
-
-    X_test, m_te = _filter_by_sid_idx(X, sid_idx, test_sids)
-    Y_test = Y[m_te]
-    last_test = last_obs[m_te]
+    # guard: if still bad (check training data)
+    if not (np.isfinite(X_train).all() and np.isfinite(Y_train).all()):
+        print("[WARN] X_train/Y_train contain NaN/Inf values. This might affect training.")
+        # We don't raise an error here, as _finite_batch will handle it,
+        # but it's good to be aware.
 
     ds_tr = StormSeqDataset(X_train, Y_train, last_tr)
     ds_val = StormSeqDataset(X_val, Y_val, last_val)
@@ -83,11 +83,11 @@ def train_one_model(model_name: str):
     dl_val = DataLoader(ds_val, batch_size=BATCH_SIZE, shuffle=False, drop_last=False)
     dl_te = DataLoader(ds_te, batch_size=BATCH_SIZE, shuffle=False, drop_last=False)
 
-    input_size = X.shape[-1]
-    # ADD THIS LINE: Model from notebook needs to know out_dim
-    out_dim = Y.shape[-1]
+    input_size = X_train.shape[-1]
+    out_dim = Y_train.shape[-1]
 
     if model_name == "pytorch":
+        print(f"[{model_name}] Initializing LSTMForecaster model...")
         model = LSTMForecaster(
             input_size=input_size,
             hidden_size=LSTM_TORCH["hidden_size"],
@@ -96,12 +96,12 @@ def train_one_model(model_name: str):
         )
         ckpt_path = CHECKPOINT_LSTM_TORCH
     elif model_name == "scratch":
-        # REVISE THIS BLOCK TO MATCH THE MODEL SIGNATURE IN THE NOTEBOOK
+        print(f"[{model_name}] Initializing LSTMFromScratchForecaster model...")
         model = LSTMFromScratchForecaster(
-            in_dim=input_size,                      # FIX: input_size -> in_dim
-            hidden=LSTM_SCRATCH["hidden_size"],     # FIX: hidden_size -> hidden
+            in_dim=input_size,
+            hidden=LSTM_SCRATCH["hidden_size"],
             num_layers=LSTM_SCRATCH["num_layers"],
-            out_dim=out_dim,                        # ADD: out_dim
+            out_dim=out_dim,
             dropout=LSTM_SCRATCH["dropout"]
         )
         ckpt_path = CHECKPOINT_LSTM_SCRATCH
@@ -111,12 +111,13 @@ def train_one_model(model_name: str):
     model = model.to(use_device)
 
     optim = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode="min", factor=FACTOR, patience=max(1, PATIENCE//2))
+    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode="min", factor=FACTOR, patience=max(1, PATIENCE // 2))
     criterion = torch.nn.MSELoss()
 
     best_val = float("inf")
     wait = 0
-    for epoch in range(1, EPOCHS+1):
+    print(f"[{model_name}] Starting training for {EPOCHS} epochs...")
+    for epoch in range(1, EPOCHS + 1):
         # ---- train ----
         model.train()
         loss_sum = 0.0
@@ -128,8 +129,9 @@ def train_one_model(model_name: str):
             if not _finite_batch(Xb, Yb):
                 skipped += Xb.size(0)
                 continue
-            pred = model(Xb)        # (B,2)
+            pred = model(Xb)  # (B,2)
             if not torch.isfinite(pred).all():
+                # This can happen if gradients explode
                 skipped += Xb.size(0)
                 continue
             loss = criterion(pred, Yb)
@@ -151,7 +153,8 @@ def train_one_model(model_name: str):
         n_val_seen = 0
         with torch.no_grad():
             for Xb, Yb, _ in dl_val:
-                Xb = Xb.to(use_device); Yb = Yb.to(use_device)
+                Xb = Xb.to(use_device);
+                Yb = Yb.to(use_device)
                 if not _finite_batch(Xb, Yb):
                     continue
                 pred = model(Xb)
@@ -168,26 +171,30 @@ def train_one_model(model_name: str):
             sched.step(loss_va)
 
         info_skipped = f" | skipped_train={skipped}" if skipped else ""
-        print(f"[{model_name}] Epoch {epoch:03d}/{EPOCHS} | train={loss_tr:.6f} | val={loss_va:.6f}{info_skipped}")
+        print(
+            f"[{model_name}] Epoch {epoch:03d}/{EPOCHS} | train_loss={loss_tr:.6f} | val_loss={loss_va:.6f}{info_skipped}")
 
         if np.isfinite(loss_va) and (loss_va < best_val):
             best_val = loss_va
             wait = 0
             os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
             torch.save(model.state_dict(), ckpt_path)
+            print(f"[{model_name}] -> Validation loss improved to {best_val:.6f}. Checkpoint saved.")
         else:
             wait += 1
             if wait >= PATIENCE:
-                print(f"[{model_name}] Early stopping at epoch {epoch}. Best val={best_val:.6f}")
+                print(f"[{model_name}] Early stopping at epoch {epoch}. Best val_loss={best_val:.6f}")
                 break
 
-    print(f"[{model_name}] Best checkpoint saved: {ckpt_path}")
+    print(f"[{model_name}] Training complete. Best checkpoint saved: {ckpt_path}")
     return ckpt_path, (X_test, Y_test, last_test)
 
 
 def train(model_choice: str):
     if model_choice == "all":
+        print("[Train] Training both models (pytorch, scratch)...")
         train_one_model("pytorch")
         train_one_model("scratch")
     else:
+        print(f"[Train] Training model: {model_choice}...")
         train_one_model(model_choice)
