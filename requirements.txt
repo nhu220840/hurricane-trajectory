@@ -1,4 +1,6 @@
 flask
+gunicorn
+requests
 torch
 pandas
 numpy
