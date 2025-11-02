@@ -1,14 +1,13 @@
 // web_app/static/js/script.js
 
-// Biến toàn cục để giữ bản đồ
+// Global variable to hold the map
 let map = null;
-// (MỚI) Biến toàn cục để giữ các lớp (layers) của bản đồ tổng quan
+// (NEW) Global variable to hold the overview map layers
 let allTracksLayerGroup = null;
-// (MỚI) Biến toàn cục để giữ lớp điều khiển (bật/tắt layer)
+// (NEW) Global variable to hold the layer control (toggle layers)
 let layerControl = null;
 
-// --- Hàm vẽ bản đồ cho Demo Dự đoán (Giữ nguyên) ---
-// (Hàm drawMap của bạn giữ nguyên, không cần sửa)
+// --- Map drawer for the Prediction Demo (unchanged structure) ---
 function drawMap(data) {
     if (!map) {
         map = L.map('map').setView(data.start_point, 7);
@@ -16,11 +15,9 @@ function drawMap(data) {
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
     } else {
-        // Xóa các layer cũ (nhưng KHÔNG xóa layer tổng quan nếu có)
+        // Remove old vector layers (but DO NOT remove the overview layer if present)
         map.eachLayer(layer => {
-            // Chỉ xóa các layer là vector (dữ liệu), không xóa tile layer
             if (layer.options.pane === 'markerPane' || layer.options.pane === 'overlayPane') {
-                 // Tránh xóa nhầm layer tổng quan
                  if (layer !== allTracksLayerGroup) {
                     map.removeLayer(layer);
                  }
@@ -29,16 +26,16 @@ function drawMap(data) {
         map.setView(data.start_point, 7);
     }
 
-    // (MỚI) Xóa lớp tổng quan nếu nó đang hiển thị
+    // (NEW) Remove overview layer if it is currently displayed
     if (allTracksLayerGroup && map.hasLayer(allTracksLayerGroup)) {
         if (layerControl) {
             layerControl.removeLayer(allTracksLayerGroup);
         }
         map.removeLayer(allTracksLayerGroup);
-        allTracksLayerGroup = null; // Đặt lại
+        allTracksLayerGroup = null;
     }
 
-    // Vẽ các đường của demo dự đoán
+    // Draw prediction demo tracks
     L.polyline(data.history_coords, { color: 'gray', weight: 3, opacity: 0.7 })
         .bindTooltip("History (10 points)")
         .addTo(map);
@@ -62,10 +59,10 @@ function drawMap(data) {
         .addTo(map);
 }
 
-// --- (MỚI) Các hàm Helper để vẽ bản đồ tổng quan ---
+// --- (NEW) Helper functions for the overview map ---
 
 /**
- * (MỚI) Xây dựng một bảng HTML chi tiết cho *toàn bộ* cơn bão
+ * (NEW) Build a detailed HTML table for the entire storm
  */
 function buildStormTableHTML(storm) {
     let html = `<h4 style="margin:5px;">Storm SID: ${storm.sid}</h4>`;
@@ -77,7 +74,7 @@ function buildStormTableHTML(storm) {
     html += '<th style="padding: 4px; border: 1px solid #ddd;">Lat</th>';
     html += '<th style="padding: 4px; border: 1px solid #ddd;">Lon</th>';
     html += '<th style="padding: 4px; border: 1px solid #ddd;">Wind (kt)</th>';
-    html += '<th style="padding: 4px; border: 1px solid #ddd;">Pres (mb)</th>';
+    html += '<th style="padding: 4px; border: 1px solid #ddd;">Pressure (mb)</th>';
     html += '</tr></thead><tbody>';
 
     for (const p of storm.points) {
@@ -96,25 +93,25 @@ function buildStormTableHTML(storm) {
 }
 
 /**
- * (MỚI) Xây dựng một popup HTML nhỏ cho *từng điểm*
+ * (NEW) Build a small popup HTML for each point
  */
 function buildPointPopupHTML(p, sid) {
     const wind_str = p.wind ? `${p.wind.toFixed(0)} kt` : 'N/A';
     const pres_str = p.pres ? `${p.pres.toFixed(0)} mb` : 'N/A';
     return `
         <b>SID:</b> ${sid}<br>
-        <b>Thời gian:</b> ${p.time}<br>
+        <b>Time:</b> ${p.time}<br>
         <hr style="margin: 3px 0;">
         <b>Lat:</b> ${p.lat.toFixed(2)}, <b>Lon:</b> ${p.lon.toFixed(2)}<br>
-        <b>Gió:</b> ${wind_str}, <b>Áp suất:</b> ${pres_str}
+        <b>Wind:</b> ${wind_str}, <b>Pressure:</b> ${pres_str}
     `;
 }
 
 /**
- * (MỚI) Hàm chính để vẽ tất cả 399 cơn bão
+ * (NEW) Main function to draw all 399 storms
  */
 function drawAllTracks(storms) {
-    // 1. Xóa lớp (layer) tổng quan cũ nếu nó tồn tại
+    // 1. Remove previous overview layer if it exists
     if (allTracksLayerGroup) {
         if (layerControl && map.hasLayer(allTracksLayerGroup)) {
             layerControl.removeLayer(allTracksLayerGroup);
@@ -124,20 +121,19 @@ function drawAllTracks(storms) {
         }
     }
 
-    // 2. Tạo các nhóm lớp (layer groups)
-    // (BẮT BUỘC) Phải có thư viện MarkerCluster đã import trong HTML
-    const markerClusterGroup = L.markerClusterGroup(); // Cho các điểm (dots)
-    const polylineGroup = L.layerGroup(); // Cho các đường (lines)
+    // 2. Create layer groups (requires MarkerCluster in HTML)
+    const markerClusterGroup = L.markerClusterGroup(); // For points (dots)
+    const polylineGroup = L.layerGroup(); // For polylines (tracks)
 
-    // 3. Lặp qua từng cơn bão
+    // 3. Iterate through storms
     for (const storm of storms) {
         const color = storm.color;
         const coords = storm.points.map(p => [p.lat, p.lon]);
 
-        // 4. Tạo bảng HTML chi tiết (cho đường line)
+        // 4. Build detailed HTML table (for the polyline popup)
         const tableHTML = buildStormTableHTML(storm);
 
-        // 5. Tạo đường PolyLine
+        // 5. Create PolyLine
         const line = L.polyline(coords, {
             color: color,
             weight: 2.5,
@@ -146,7 +142,7 @@ function drawAllTracks(storms) {
         line.bindPopup(tableHTML, { maxWidth: 400 });
         line.addTo(polylineGroup);
 
-        // 6. Lặp qua từng điểm để thêm vào cluster
+        // 6. Add each point to the cluster
         for (const p of storm.points) {
             const pointPopupHTML = buildPointPopupHTML(p, storm.sid);
 
@@ -158,44 +154,42 @@ function drawAllTracks(storms) {
                 fillOpacity: 0.7
             });
             marker.bindPopup(pointPopupHTML);
-            marker.addTo(markerClusterGroup); // <-- Thêm vào CLUSTER
+            marker.addTo(markerClusterGroup);
         }
     }
 
-    // 7. Nhóm cả hai lớp (lines và clusters) lại
+    // 7. Group both layers (lines and clusters)
     allTracksLayerGroup = L.layerGroup([polylineGroup, markerClusterGroup]);
     allTracksLayerGroup.addTo(map);
 
-    // 8. Thêm Layer Control (bộ điều khiển lớp)
+    // 8. Add Layer Control
     if (!layerControl) {
-        // Tạo bộ điều khiển nếu nó chưa tồn tại
         layerControl = L.control.layers(null, null, { collapsed: false }).addTo(map);
     }
-    // Thêm lớp mới vào bộ điều khiển
-    layerControl.addOverlay(allTracksLayerGroup, "Bản đồ Tổng quan (399 bão)");
+    layerControl.addOverlay(allTracksLayerGroup, "Overview Map (399 storms)");
 }
 
 
-// --- Hàm chạy khi trang được tải (SỬA ĐỔI) ---
+// --- Run when the page loads ---
 document.addEventListener("DOMContentLoaded", function() {
     const selectBox = document.getElementById("sample-select");
     const predictButton = document.getElementById("predict-button");
-    // (MỚI) Lấy nút mới và span trạng thái
+    // (NEW) Get the new button and status span
     const loadAllTracksButton = document.getElementById("load-all-tracks-button");
     const loadStatus = document.getElementById("load-status");
 
-    // 1. (MỚI) Khởi tạo bản đồ ngay lập tức
+    // 1. (NEW) Initialize the map immediately
     if (!map) {
-        map = L.map('map').setView([20, -40], 3); // View toàn cầu
+        map = L.map('map').setView([20, -40], 3); // Global view
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        // (MỚI) Tạo bộ điều khiển lớp ngay
+        // (NEW) Create the layer control immediately
         layerControl = L.control.layers(null, null, { collapsed: false }).addTo(map);
     }
 
-    // 2. Tải danh sách Case Studies (Giữ nguyên)
+    // 2. Load list of Case Studies
     fetch("/api/get_test_samples")
         .then(response => response.json())
         .then(samples => {
@@ -209,48 +203,47 @@ document.addEventListener("DOMContentLoaded", function() {
             predictButton.disabled = false;
         })
         .catch(err => {
-            console.error("Lỗi tải samples:", err);
-            selectBox.innerHTML = "<option>Lỗi tải danh sách</option>";
+            console.error("Failed to load samples:", err);
+            selectBox.innerHTML = "<option>Failed to load list</option>";
         });
 
-    // 3. Sự kiện cho nút "Run Demo" (SỬA ĐỔI)
+    // 3. Event for "Run Demo" button
     predictButton.addEventListener("click", function() {
         const sampleId = selectBox.value;
         if (!sampleId) return;
 
-        predictButton.textContent = "Đang dự đoán...";
+        predictButton.textContent = "Predicting...";
         predictButton.disabled = true;
 
         fetch(`/api/predict?sample_id=${sampleId}`)
             .then(response => response.json())
             .then(data => {
-                // (SỬA ĐỔI) Xóa lớp tổng quan (nếu có) để xem rõ demo
+                // Remove overview layer (if any) to make the demo clear
                 if (allTracksLayerGroup && map.hasLayer(allTracksLayerGroup)) {
                     layerControl.removeLayer(allTracksLayerGroup);
                     map.removeLayer(allTracksLayerGroup);
                 }
-                drawMap(data); // Vẽ bản đồ dự đoán
-                predictButton.textContent = "Chạy Demo Dự đoán";
+                drawMap(data); // Draw prediction map
+                predictButton.textContent = "Run Prediction Demo";
                 predictButton.disabled = false;
             })
             .catch(err => {
-                console.error("Lỗi dự đoán:", err);
-                alert("Lỗi xảy ra khi dự đoán.");
-                predictButton.textContent = "Chạy Demo Dự đoán";
+                console.error("Prediction error:", err);
+                alert("An error occurred during prediction.");
+                predictButton.textContent = "Run Prediction Demo";
                 predictButton.disabled = false;
             });
     });
 
-    // 4. (MỚI) Sự kiện cho nút "Tải Bản đồ Tổng quan"
+    // 4. Event for "Load Overview Map" button
     loadAllTracksButton.addEventListener("click", function() {
-        loadStatus.textContent = "Đang tải 399 cơn bão (có thể mất vài giây)...";
+        loadStatus.textContent = "Loading 399 storms (this may take a few seconds)...";
         loadAllTracksButton.disabled = true;
 
         fetch("/api/get_all_tracks")
             .then(response => {
                 if (!response.ok) {
-                    // Nếu server trả về lỗi (như 500)
-                    throw new Error(`Lỗi Server: ${response.statusText}`);
+                    throw new Error(`Server error: ${response.statusText}`);
                 }
                 return response.json();
             })
@@ -259,24 +252,24 @@ document.addEventListener("DOMContentLoaded", function() {
                     throw new Error(data.error);
                 }
 
-                // Xóa các lớp demo cũ (nếu có)
+                // Remove old demo layers (if any)
                 map.eachLayer(layer => {
                     if (layer.options.pane === 'markerPane' || layer.options.pane === 'overlayPane') {
-                         if (layer !== allTracksLayerGroup) { // Không xóa chính nó
+                         if (layer !== allTracksLayerGroup) {
                             map.removeLayer(layer);
                          }
                     }
                 });
 
-                drawAllTracks(data); // Vẽ bản đồ tổng quan
+                drawAllTracks(data); // Draw overview map
                 map.setView([20, -40], 3); // Reset view
-                loadStatus.textContent = `Đã tải ${data.length} cơn bão!`;
+                loadStatus.textContent = `Loaded ${data.length} storms!`;
                 loadAllTracksButton.disabled = false;
             })
             .catch(err => {
-                console.error("Lỗi tải bản đồ tổng quan:", err);
-                loadStatus.textContent = "Lỗi! Không thể tải dữ liệu.";
-                alert("Lỗi tải bản đồ tổng quan: " + err.message);
+                console.error("Failed to load overview map:", err);
+                loadStatus.textContent = "Error! Could not load data.";
+                alert("Failed to load overview map: " + err.message);
                 loadAllTracksButton.disabled = false;
             });
     });
