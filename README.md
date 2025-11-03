@@ -44,9 +44,11 @@ hurricane-trajectory-main/
 ├── src/
 │   ├── prepare_raw_data.py # Step 1: Cleans raw IBTrACS CSV
 │   ├── data_processing.py  # Step 2: Creates sequences, splits data, saves .npz/scalers
+│   ├── dataset.py          # Torch Dataset / data loaders for training & evaluation
 │   ├── models.py           # Defines the LSTMForecaster and LSTMFromScratchForecaster
 │   ├── train.py            # Step 3: Training logic for both models
 │   ├── evaluate.py         # Step 4: Evaluation logic
+│   ├── utils.py            # Common helpers (metrics, geodesic distance, scaling, etc.)
 │   └── config.py           # Configuration (file paths, model hyperparameters)
 │
 └── web_app/
