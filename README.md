@@ -71,7 +71,7 @@ hurricane-trajectory-main/
 1. **Clone the repository**
    ```bash
    git clone https://github.com/nhu220840/hurricane-trajectory.git
-   cd hurricane-trajectory-main
+   cd hurricane-trajectory
    ```
 
 2. **Create and activate a virtual environment (recommended)**
