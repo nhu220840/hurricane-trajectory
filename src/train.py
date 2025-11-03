@@ -1,5 +1,3 @@
-# src/train.py
-
 import os
 import random
 import numpy as np
@@ -21,15 +19,10 @@ def set_seed(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # (NEW) Add deterministic settings for reproducibility
+    # Add deterministic settings for reproducibility
     if torch.cuda.is_available():
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-
-
-# (REMOVED) _split_by_sid - This logic is now in data_processing.py
-# (REMOVED) _filter_by_sid_idx - This logic is now in data_processing.py
-
 
 def _finite_batch(Xb, Yb):
     x_ok = torch.isfinite(Xb).all()
@@ -42,36 +35,35 @@ def train_one_model(model_name: str):
     use_device = "cuda" if (torch.cuda.is_available() and DEVICE == "cuda") else "cpu"
     print(f"[{model_name}] Using device: {use_device}")
 
-    # (REVISED) Load the pre-split data
+    # Load the pre-split data
     print(f"[Load] Loading pre-split data from {PROCESSED_NPZ}...")
-    try:
-        data = np.load(PROCESSED_NPZ, allow_pickle=True)
-        X_train = data["X_train"]
-        Y_train = data["Y_train"]
-        last_tr = data["last_obs_train"]
+    # try:
+    data = np.load(PROCESSED_NPZ, allow_pickle=True)
+    X_train = data["X_train"]
+    Y_train = data["Y_train"]
+    last_tr = data["last_obs_train"]
 
-        X_val = data["X_val"]
-        Y_val = data["Y_val"]
-        last_val = data["last_obs_val"]
+    X_val = data["X_val"]
+    Y_val = data["Y_val"]
+    last_val = data["last_obs_val"]
 
-        X_test = data["X_test"]
-        Y_test = data["Y_test"]
-        last_test = data["last_obs_test"]
-        print(f"[Load] Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
-    except FileNotFoundError:
-        print(f"ERROR: File not found: {PROCESSED_NPZ}")
-        print("Please run the data processing step first (e.g., python main.py --process-data)")
-        return None, None
-    except KeyError as e:
-        print(f"ERROR: Missing expected array {e} in {PROCESSED_NPZ}.")
-        print("The .npz file might be old or corrupted. Please re-run data processing.")
-        return None, None
+    X_test = data["X_test"]
+    Y_test = data["Y_test"]
+    last_test = data["last_obs_test"]
+    print(f"[Load] Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
+    # except FileNotFoundError:
+    #     print(f"ERROR: File not found: {PROCESSED_NPZ}")
+    #     print("Please run the data processing step first (e.g., python main.py --process-data)")
+    #     return None, None
+    # except KeyError as e:
+    #     print(f"ERROR: Missing expected array {e} in {PROCESSED_NPZ}.")
+    #     print("The .npz file might be old or corrupted. Please re-run data processing.")
+    #     return None, None
 
-    # (REMOVED) Splitting logic is no longer needed here.
 
     # guard: if still bad (check training data)
-    if not (np.isfinite(X_train).all() and np.isfinite(Y_train).all()):
-        print("[WARN] X_train/Y_train contain NaN/Inf values. This might affect training.")
+    # if not (np.isfinite(X_train).all() and np.isfinite(Y_train).all()):
+    #     print("[WARN] X_train/Y_train contain NaN/Inf values. This might affect training.")
         # We don't raise an error here, as _finite_batch will handle it,
         # but it's good to be aware.
 

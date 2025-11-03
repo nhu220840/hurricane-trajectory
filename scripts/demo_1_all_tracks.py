@@ -1,4 +1,3 @@
-# scripts/demo_1_all_tracks.py
 import pandas as pd
 import folium
 from pathlib import Path

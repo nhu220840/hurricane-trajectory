@@ -1,5 +1,3 @@
-// web_app/static/js/script.js
-
 // Global variable to hold the map
 let map = null;
 // (NEW) Global variable to hold the overview map layers

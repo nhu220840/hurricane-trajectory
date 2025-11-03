@@ -1,6 +1,3 @@
-# src/prepare_raw_data.py
-
-from pathlib import Path
 import pandas as pd
 
 from .config import RAW_DIR, RAW_CSV
@@ -13,8 +10,8 @@ RAW_FEATURES_TO_KEEP = {
     'LON': 'lon',
     'WMO_WIND': 'wind',
     'WMO_PRES': 'pres',
-    'DIST2LAND': 'dist2land',  # new feature
-    'BASIN': 'basin'           # new feature (categorical)
+    'DIST2LAND': 'dist2land',
+    'BASIN': 'basin'
 }
 
 def run_raw_data_preparation():
@@ -27,9 +24,9 @@ def run_raw_data_preparation():
 
     # Put the original IBTrACS filename here
     source_csv = RAW_DIR / "ibtracs.last3years.list.v04r01.csv"
-    if not source_csv.exists():
-        print(f"[WARN] {source_csv} not found. Skipping raw preparation step.")
-        return
+    # if not source_csv.exists():
+    #     print(f"[WARN] {source_csv} not found. Skipping raw preparation step.")
+    #     return
 
     df = pd.read_csv(source_csv, skiprows=[1])
 
@@ -38,8 +35,8 @@ def run_raw_data_preparation():
     df = df.rename(columns=col_upper_map)
 
     keep_cols_upper = [c for c in RAW_FEATURES_TO_KEEP.keys() if c in df.columns]
-    if not keep_cols_upper:
-        raise ValueError("Could not match any columns in RAW_FEATURES_TO_KEEP with the original file.")
+    # if not keep_cols_upper:
+    #     raise ValueError("Could not match any columns in RAW_FEATURES_TO_KEEP with the original file.")
 
     df = df[keep_cols_upper].copy()
     df = df.rename(columns=RAW_FEATURES_TO_KEEP)

@@ -12,7 +12,7 @@ def set_seed(seed_value=42):
 
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)  # if multi-GPU
+        torch.cuda.manual_seed_all(seed_value)
         # These settings might slow down training but are necessary for full reproducibility on GPU
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False

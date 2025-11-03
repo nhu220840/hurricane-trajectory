@@ -1,24 +1,18 @@
-# src/data_processing.py
-
 import pickle
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from pathlib import Path
-import random  # (NEW) Added for splitting
 
 from .config import (
     RAW_CSV, PROCESSED_DIR, PROCESSED_NPZ,
     NUMERIC_X, CATEGORICAL_X, FEATURES_X,
     TARGET_Y, TIME_COLUMN, SID_COLUMN,
     N_IN, N_OUT, PREPROCESSOR_X_PKL, SCALER_Y_PKL,
-    SEED  # (NEW) Import SEED
+    SEED
 )
 
-
-# ================= (NEW) Splitting Function =================
-
+# ================= Splitting Function =================
 def _split_by_sid(window_sid_idx, train_ratio=0.7, val_ratio=0.15, seed=SEED):
     """
     Splits a list of SIDs into train, val, and test sets based on unique SIDs.
@@ -36,13 +30,12 @@ def _split_by_sid(window_sid_idx, train_ratio=0.7, val_ratio=0.15, seed=SEED):
     return train_sids, val_sids, test_sids
 
 
-# ================= Helpers (Unchanged "safe" functions) =================
-
+# ================= Helpers =================
 def _sort_and_basic_clean(df: pd.DataFrame) -> pd.DataFrame:
     required = set([SID_COLUMN, TIME_COLUMN, "lat", "lon"] + FEATURES_X)
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns in RAW_CSV: {missing}")
+    # missing = [c for c in required if c not in df.columns]
+    # if missing:
+    #     raise ValueError(f"Missing required columns in RAW_CSV: {missing}")
 
     df = df[list(required)].copy()
     df = df.sort_values([SID_COLUMN, TIME_COLUMN]).reset_index(drop=True)
@@ -62,7 +55,7 @@ def _coerce_numeric_columns(df: pd.DataFrame, numeric_cols) -> pd.DataFrame:
 def _interpolate_numeric_by_sid(df: pd.DataFrame, numeric_cols) -> pd.DataFrame:
     # (This function is safe as it groups by SID)
     numeric_cols = [c for c in numeric_cols if c in df.columns]
-    numeric_cols = list(dict.fromkeys(numeric_cols))  # remove duplicates
+    numeric_cols = list(dict.fromkeys(numeric_cols))
 
     def _interp_block(g):
         g = g.copy()
@@ -94,11 +87,10 @@ def _encode_sid_to_index(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ================= (REVISED) Fit/Apply Helper Functions =================
-
+# ================= Fit/Apply Helper Functions =================
 def _fit_final_imputer(df_train: pd.DataFrame, numeric_cols):
     """
-    (NEW) Fits the imputer (median) ONLY on training data.
+    Fits the imputer (median) ONLY on training data.
     Returns the median map.
     """
     cols = [c for c in numeric_cols if c in df_train.columns]
@@ -110,7 +102,7 @@ def _fit_final_imputer(df_train: pd.DataFrame, numeric_cols):
 
 def _apply_final_imputer(df: pd.DataFrame, numeric_cols, median_map) -> pd.DataFrame:
     """
-    (NEW) Applies the pre-fitted median map to any DataFrame (train, val, or test).
+    Applies the pre-fitted median map to any DataFrame (train, val, or test).
     """
     cols = [c for c in numeric_cols if c in df.columns]
     df.loc[:, cols] = df[cols].fillna(median_map)
@@ -121,7 +113,7 @@ def _apply_final_imputer(df: pd.DataFrame, numeric_cols, median_map) -> pd.DataF
 
 def _fit_x_preprocessor(df_train: pd.DataFrame):
     """
-    (REVISED) Fits the ColumnTransformer ONLY on training data.
+    Fits the ColumnTransformer ONLY on training data.
     """
     num_cols = [c for c in NUMERIC_X if c in df_train.columns]
     cat_cols = [c for c in CATEGORICAL_X if c in df_train.columns]
@@ -140,7 +132,7 @@ def _fit_x_preprocessor(df_train: pd.DataFrame):
 
 def _fit_y_scaler(df_train: pd.DataFrame):
     """
-    (REVISED) Fits the Y scaler ONLY on training data.
+    Fits the Y scaler ONLY on training data.
     """
     scaler_y = MinMaxScaler()
     # FIT only on df_train
@@ -193,12 +185,11 @@ def _filter_invalid_windows(X, Y, last_obs, sid_idx):
     return X[mask], Y[mask], last_obs[mask], sid_idx[mask]
 
 
-# ================= (REVISED) Public API =================
-
+# ================= Public API =================
 def process_and_save_npz():
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    if not RAW_CSV.exists():
-        raise FileNotFoundError(f"{RAW_CSV} not found")
+    # if not RAW_CSV.exists():
+    #     raise FileNotFoundError(f"{RAW_CSV} not found")
 
     df = pd.read_csv(RAW_CSV)
 
@@ -227,7 +218,7 @@ def process_and_save_npz():
     # 5) sid index
     df = _encode_sid_to_index(df)
 
-    # === (NEW) DATA SPLIT ===
+    # === DATA SPLIT ===
     # Split the DataFrame *before* fitting any scalers or median imputers.
     print("[Split] Performing split based on SID...")
     all_sids_idx = df["sid_idx"].values
@@ -237,10 +228,10 @@ def process_and_save_npz():
     df_val = df[df['sid_idx'].isin(val_sids)].copy()
     df_test = df[df['sid_idx'].isin(test_sids)].copy()
     print(f"[Split] df_train: {len(df_train)}, df_val: {len(df_val)}, df_test: {len(df_test)}")
-    if len(df_train) == 0:
-        raise ValueError("Training set is empty. Check splitting logic or data source.")
+    # if len(df_train) == 0:
+    #     raise ValueError("Training set is empty. Check splitting logic or data source.")
 
-    # === (NEW) FIT PREPROCESSORS (ONLY ON TRAIN DATA) ===
+    # === FIT PREPROCESSORS (ONLY ON TRAIN DATA) ===
 
     # 6) Final impute (Fit on train, apply to all)
     print("[Fit] Fitting imputer on train data...")
@@ -266,10 +257,10 @@ def process_and_save_npz():
     X_test_all = X_test_all.astype(np.float32)
 
     # Get feature names (after fitting)
-    try:
-        x_feature_names = preprocessor_x.get_feature_names_out().tolist()
-    except Exception:
-        x_feature_names = []
+    # try:
+    x_feature_names = preprocessor_x.get_feature_names_out().tolist()
+    # except Exception:
+    #     x_feature_names = []
 
     # 8) Y scaler (Fit on train, transform all)
     print("[Fit] Fitting Y scaler on train data...")
@@ -278,8 +269,7 @@ def process_and_save_npz():
     Y_val_all = scaler_y.transform(df_val[TARGET_Y].values.astype(np.float32))
     Y_test_all = scaler_y.transform(df_test[TARGET_Y].values.astype(np.float32))
 
-    # === (NEW) CREATE WINDOWS FOR EACH SPLIT ===
-
+    # === CREATE WINDOWS FOR EACH SPLIT ===
     # 9) Windows
     print("[Window] Creating windows for Train set...")
     X_tr, Y_tr, last_tr, sid_tr = _make_windows(

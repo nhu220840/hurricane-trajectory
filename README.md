@@ -89,9 +89,9 @@ hurricane-trajectory-main/
 
 ## How to Run the Project
 
-There are two main parts to this project: the **ML Pipeline** (for generating models) and the **Web Application** (for visualizing results).
+There are two main parts to this project: the **Pipeline** (for generating models) and the **Web Application** (for visualizing results).
 
-### 1) Run the ML Pipeline
+### 1) Run the Pipeline
 
 You must run the pipeline first to process the data and train the models. The `main.py` script is the entry point for all pipeline steps.
 

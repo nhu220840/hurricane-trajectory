@@ -1,5 +1,3 @@
-# src/config.py
-
 from pathlib import Path
 
 # ========== Paths ==========
@@ -11,8 +9,8 @@ PLOTS_DIR = Path("results/plots")
 
 RAW_CSV = RAW_DIR / "ibtracs_track_ml.csv"
 PROCESSED_NPZ = PROCESSED_DIR / "processed_data.npz"
-PREPROCESSOR_X_PKL = PROCESSED_DIR / "preprocessor_x.pkl"  # ColumnTransformer (num scaler + cat OHE)
-SCALER_Y_PKL = PROCESSED_DIR / "scaler_y.pkl"              # separate scaler for y (delta)
+PREPROCESSOR_X_PKL = PROCESSED_DIR / "preprocessor_x.pkl"
+SCALER_Y_PKL = PROCESSED_DIR / "scaler_y.pkl"
 
 CHECKPOINT_LSTM_TORCH = MODELS_DIR / "best_lstm_pytorch.pt"
 CHECKPOINT_LSTM_SCRATCH = MODELS_DIR / "best_lstm_scratch.pt"
@@ -41,7 +39,7 @@ N_OUT = 1  # one-step delta
 # ========== Training ==========
 SEED = 1337
 BATCH_SIZE = 128
-EPOCHS = 50
+EPOCHS = 100
 LR = 1e-3
 WEIGHT_DECAY = 1e-4
 PATIENCE = 8

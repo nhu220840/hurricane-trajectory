@@ -1,11 +1,7 @@
-# src/models.py
-
-import math
 import torch
 import torch.nn as nn
 
 # ------------------- PyTorch LSTM Forecaster -------------------
-# (This class is kept unchanged from the original models.py file)
 class LSTMForecaster(nn.Module):
     """
     Standard PyTorch LSTM, predicts (Δlat, Δlon) => output_size=2
@@ -28,9 +24,7 @@ class LSTMForecaster(nn.Module):
         return y
 
 
-# ------------------- Scratch LSTM (FROM NOTEBOOK REbuildLSTM.ipynb) -------------------
-# (The two classes below are copied from cells 8 and 10 of the notebook)
-
+# ------------------- Scratch LSTM -------------------
 class _ManualLSTMCell(nn.Module):
     def __init__(self, in_dim: int, hidden: int):
         super().__init__()
@@ -69,7 +63,6 @@ class _ManualLSTMCell(nn.Module):
 class LSTMFromScratchForecaster(nn.Module):
     """
     Stacked LSTM from _ManualLSTMCell. Get h at the last timestep -> Linear head to out_dim.
-    (Logic from cell 10 - REbuildLSTM.ipynb)
     """
     def __init__(self, in_dim, hidden=20, num_layers=2, out_dim=2, dropout=0.2):
         super().__init__()

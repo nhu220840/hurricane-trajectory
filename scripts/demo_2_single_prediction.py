@@ -1,4 +1,3 @@
-# scripts/demo_2_single_prediction.py
 import torch
 import pickle
 import numpy as np
