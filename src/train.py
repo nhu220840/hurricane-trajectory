@@ -37,7 +37,6 @@ def train_one_model(model_name: str):
 
     # Load the pre-split data
     print(f"[Load] Loading pre-split data from {PROCESSED_NPZ}...")
-    # try:
     data = np.load(PROCESSED_NPZ, allow_pickle=True)
     X_train = data["X_train"]
     Y_train = data["Y_train"]
@@ -51,21 +50,6 @@ def train_one_model(model_name: str):
     Y_test = data["Y_test"]
     last_test = data["last_obs_test"]
     print(f"[Load] Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
-    # except FileNotFoundError:
-    #     print(f"ERROR: File not found: {PROCESSED_NPZ}")
-    #     print("Please run the data processing step first (e.g., python main.py --process-data)")
-    #     return None, None
-    # except KeyError as e:
-    #     print(f"ERROR: Missing expected array {e} in {PROCESSED_NPZ}.")
-    #     print("The .npz file might be old or corrupted. Please re-run data processing.")
-    #     return None, None
-
-
-    # guard: if still bad (check training data)
-    # if not (np.isfinite(X_train).all() and np.isfinite(Y_train).all()):
-    #     print("[WARN] X_train/Y_train contain NaN/Inf values. This might affect training.")
-        # We don't raise an error here, as _finite_batch will handle it,
-        # but it's good to be aware.
 
     ds_tr = StormSeqDataset(X_train, Y_train, last_tr)
     ds_val = StormSeqDataset(X_val, Y_val, last_val)

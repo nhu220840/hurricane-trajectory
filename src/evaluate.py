@@ -27,27 +27,15 @@ def _load_test_split():
     Loads the pre-split test arrays from the .npz file.
     """
     print(f"[Load] Loading pre-split test data from {PROCESSED_NPZ}...")
-    # try:
     data = np.load(PROCESSED_NPZ, allow_pickle=True)
     X_test = data["X_test"]
     Y_test = data["Y_test"]
     last_test = data["last_obs_test"]
     print(f"[Load] Test data shape: {X_test.shape}")
-    # except FileNotFoundError:
-    #     print(f"ERROR: File not found: {PROCESSED_NPZ}")
-    #     print("Please run the data processing step first (e.g., python main.py --process-data)")
-    #     return None, None, None  # Return None to fail gracefully
-    # except KeyError as e:
-    #     print(f"ERROR: Missing expected array {e} in {PROCESSED_NPZ}.")
-    #     print("The .npz file might be old or corrupted. Please re-run data processing.")
-    #     return None, None, None  # Return None to fail gracefully
 
     return X_test, Y_test, last_test
 
 def _safe_load_state_dict(ckpt_path: Path, device: str):
-    # (This function is unchanged)
-    # try:
-    # Try loading state_dict (if ckpt saved state_dict)
     state = torch.load(ckpt_path, map_location=device)
     # Check if this is a state_dict or a full (old) model
     if not isinstance(state, dict) or "model_state_dict" not in state:
@@ -60,19 +48,6 @@ def _safe_load_state_dict(ckpt_path: Path, device: str):
     else:
         return state
 
-    # except Exception as e:
-    #     print(f"Error loading checkpoint {ckpt_path}: {e}")
-    #     # Try fallback loading the full model (less safe)
-    #     try:
-    #         state = torch.load(ckpt_path, map_location=device, pickle_module=pickle)
-    #         if hasattr(state, 'state_dict'):  # If it's a model
-    #             return state.state_dict()
-    #         return state  # Return whatever was loaded
-    #     except Exception as e2:
-    #         print(f"Fallback loading failed: {e2}")
-    #         return None
-
-
 def _predict_errs_km_and_deltas(model, ckpt_path: Path,
                                 X_test: np.ndarray, Y_test: np.ndarray, last_obs: np.ndarray,
                                 scaler_y, device: str):
@@ -83,24 +58,8 @@ def _predict_errs_km_and_deltas(model, ckpt_path: Path,
       y_true_deg: (B,2) true delta (degrees)
       lat_true, lon_true, lat_pred, lon_pred: (B,)
     """
-    # (This function is unchanged, but with added safety checks)
-    # if not ckpt_path.exists():
-    #     print(f"Checkpoint not found: {ckpt_path}")
-    #     return None
-
-    # try:
     state_dict = _safe_load_state_dict(ckpt_path, device=device)
-    # if state_dict is None:
-    #     print(f"Failed to load state dict from {ckpt_path}")
-    #     return None
     model.load_state_dict(state_dict)
-    # except RuntimeError as e:
-    #     print(f"Error loading state_dict for model {model.__class__.__name__}: {e}")
-    #     print("Checkpoint might be incompatible with model architecture.")
-    #     return None
-    # except Exception as e:
-    #     print(f"Unknown error loading checkpoint {ckpt_path}: {e}")
-    #     return None
 
     model.to(device)
     model.eval()
@@ -187,17 +146,10 @@ def evaluate():
     print("[Evaluate] Starting evaluation...")
     # Load test data
     X_test, Y_test, last_test = _load_test_split()
-    # if X_test is None:
-    #     print("[Evaluate] Could not load test data. Aborting evaluation.")
-    #     return None
 
-    # try:
     with open(SCALER_Y_PKL, "rb") as f:
         scaler_y = pickle.load(f)
     print(f"[Load] Loaded Y scaler from {SCALER_Y_PKL}")
-    # except FileNotFoundError:
-    #     print(f"ERROR: Scaler file not found: {SCALER_Y_PKL}. Aborting.")
-    #     return None
 
     input_size = X_test.shape[-1]
     out_dim = Y_test.shape[-1]

@@ -33,9 +33,6 @@ def _split_by_sid(window_sid_idx, train_ratio=0.7, val_ratio=0.15, seed=SEED):
 # ================= Helpers =================
 def _sort_and_basic_clean(df: pd.DataFrame) -> pd.DataFrame:
     required = set([SID_COLUMN, TIME_COLUMN, "lat", "lon"] + FEATURES_X)
-    # missing = [c for c in required if c not in df.columns]
-    # if missing:
-    #     raise ValueError(f"Missing required columns in RAW_CSV: {missing}")
 
     df = df[list(required)].copy()
     df = df.sort_values([SID_COLUMN, TIME_COLUMN]).reset_index(drop=True)
@@ -172,24 +169,21 @@ def _make_windows(X_all, Y_all, sids_idx, lat_arr, lon_arr, N_in, N_out):
 def _filter_invalid_windows(X, Y, last_obs, sid_idx):
     """
     Remove any windows with NaN/Inf in X, Y, or last_obs.
-    (Unchanged)
     """
     mask = (
             np.isfinite(X).all(axis=(1, 2)) &
             np.isfinite(Y).all(axis=1) &
             np.isfinite(last_obs).all(axis=1)
     )
-    dropped = int(X.shape[0] - mask.sum())
-    if dropped > 0:
-        print(f"[WARN] Dropped {dropped} / {X.shape[0]} windows due to NaN/Inf.")
+    # dropped = int(X.shape[0] - mask.sum())
+    # if dropped > 0:
+    #     print(f"[WARN] Dropped {dropped} / {X.shape[0]} windows due to NaN/Inf.")
     return X[mask], Y[mask], last_obs[mask], sid_idx[mask]
 
 
 # ================= Public API =================
 def process_and_save_npz():
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    # if not RAW_CSV.exists():
-    #     raise FileNotFoundError(f"{RAW_CSV} not found")
 
     df = pd.read_csv(RAW_CSV)
 
@@ -228,8 +222,6 @@ def process_and_save_npz():
     df_val = df[df['sid_idx'].isin(val_sids)].copy()
     df_test = df[df['sid_idx'].isin(test_sids)].copy()
     print(f"[Split] df_train: {len(df_train)}, df_val: {len(df_val)}, df_test: {len(df_test)}")
-    # if len(df_train) == 0:
-    #     raise ValueError("Training set is empty. Check splitting logic or data source.")
 
     # === FIT PREPROCESSORS (ONLY ON TRAIN DATA) ===
 
@@ -257,10 +249,7 @@ def process_and_save_npz():
     X_test_all = X_test_all.astype(np.float32)
 
     # Get feature names (after fitting)
-    # try:
     x_feature_names = preprocessor_x.get_feature_names_out().tolist()
-    # except Exception:
-    #     x_feature_names = []
 
     # 8) Y scaler (Fit on train, transform all)
     print("[Fit] Fitting Y scaler on train data...")

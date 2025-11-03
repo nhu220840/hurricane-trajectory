@@ -24,9 +24,6 @@ def run_raw_data_preparation():
 
     # Put the original IBTrACS filename here
     source_csv = RAW_DIR / "ibtracs.last3years.list.v04r01.csv"
-    # if not source_csv.exists():
-    #     print(f"[WARN] {source_csv} not found. Skipping raw preparation step.")
-    #     return
 
     df = pd.read_csv(source_csv, skiprows=[1])
 
@@ -35,8 +32,6 @@ def run_raw_data_preparation():
     df = df.rename(columns=col_upper_map)
 
     keep_cols_upper = [c for c in RAW_FEATURES_TO_KEEP.keys() if c in df.columns]
-    # if not keep_cols_upper:
-    #     raise ValueError("Could not match any columns in RAW_FEATURES_TO_KEEP with the original file.")
 
     df = df[keep_cols_upper].copy()
     df = df.rename(columns=RAW_FEATURES_TO_KEEP)
