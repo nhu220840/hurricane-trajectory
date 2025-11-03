@@ -1,5 +1,3 @@
-# web_app/app.py
-
 import torch
 import pickle
 import numpy as np
@@ -7,64 +5,64 @@ import warnings
 import sys
 from flask import Flask, render_template, jsonify, request
 from pathlib import Path
-import pandas as pd  # (MỚI) Thêm pandas
-import random  # (MỚI) Thêm random
-import json  # (MỚI) Thêm json
+import pandas as pd  # (NEW) Add pandas
+import random  # (NEW) Add random
+import json  # (NEW) Add json
 
-# --- (MỚI) CẤU HÌNH ĐƯỜNG DẪN ---
+# --- (NEW) PATH CONFIGURATION ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 DATA_PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
-DATA_RAW_DIR = PROJECT_ROOT / "data" / "raw"  # (MỚI) Thêm đường dẫn đến thư mục RAW
+DATA_RAW_DIR = PROJECT_ROOT / "data" / "raw"  # (NEW) Add RAW data directory path
 
-# (SỬA ĐỔI) Import từ src/
+# (MODIFIED) Import from src/
 from src.models import LSTMForecaster, LSTMFromScratchForecaster
 from src.config import (
     LSTM_TORCH, LSTM_SCRATCH,
     NUMERIC_X, SEED,
-    PROCESSED_NPZ, SCALER_Y_PKL, PREPROCESSOR_X_PKL,  # Import đường dẫn
-    CHECKPOINT_LSTM_TORCH, CHECKPOINT_LSTM_SCRATCH,  # Import đường dẫn
-    RAW_CSV  # (MỚI) Import đường dẫn RAW_CSV
+    PROCESSED_NPZ, SCALER_Y_PKL, PREPROCESSOR_X_PKL,  # Import file paths
+    CHECKPOINT_LSTM_TORCH, CHECKPOINT_LSTM_SCRATCH,  # Import checkpoint paths
+    RAW_CSV  # (NEW) Import RAW_CSV path
 )
 
-# --- KHỞI TẠO FLASK ---
+# --- INITIALIZE FLASK ---
 app = Flask(__name__)
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Sử dụng thiết bị: {device}")
+print(f"Using device: {device}")
 
-# --- BIẾN TOÀN CỤC ĐỂ GIỮ ARTIFACTS ---
+# --- GLOBAL VARIABLE TO STORE ARTIFACTS ---
 artifacts = {}
 
 
-# (SỬA ĐỔI) Cập nhật hàm load_artifacts
+# (MODIFIED) Updated load_artifacts function
 def load_artifacts():
-    """Tải models, scalers, dữ liệu test, VÀ dữ liệu raw vào RAM."""
-    print("Bắt đầu tải artifacts...")
+    """Load models, scalers, test data, AND raw data into RAM."""
+    print("Starting to load artifacts...")
 
-    # 1. Tải dữ liệu TEST (cho demo dự đoán)
-    # (SỬA ĐỔI: Tải các mảng đã chia sẵn từ tệp .npz mới)
+    # 1. Load TEST data (for demo prediction)
+    # (MODIFIED: Load pre-split arrays from the new .npz file)
     try:
         data_path = DATA_PROCESSED_DIR / PROCESSED_NPZ.name
         if not data_path.exists():
-            print(f"LỖI: Không tìm thấy tệp {data_path}")
-            print("Vui lòng chạy 'python main.py --process-data' trước.")
+            print(f"ERROR: File not found: {data_path}")
+            print("Please run 'python main.py --process-data' first.")
             return False
 
         data = np.load(data_path, allow_pickle=True)
 
         X_test = data["X_test"]
-        Y_test = data["Y_test"]  # Cần Y_test để lấy out_dim
+        Y_test = data["Y_test"]  # Needed to determine out_dim
         artifacts["X_test"] = X_test
         artifacts["last_obs_test"] = data["last_obs_test"]
-        print(f"Đã tải {len(X_test)} mẫu test vào RAM.")
+        print(f"Loaded {len(X_test)} test samples into RAM.")
 
     except Exception as e:
-        print(f"LỖI khi tải dữ liệu test (từ .npz): {e}")
-        print("File .npz có thể bị hỏng hoặc sai định dạng. Vui lòng chạy lại --process-data.")
+        print(f"ERROR while loading test data (.npz): {e}")
+        print("The .npz file might be corrupted or in the wrong format. Please re-run --process-data.")
         return False
 
-    # 2. Tải Scalers
+    # 2. Load Scalers
     try:
         scaler_y_path = DATA_PROCESSED_DIR / SCALER_Y_PKL.name
         with open(scaler_y_path, "rb") as f:
@@ -79,29 +77,39 @@ def load_artifacts():
 
         indices = {}
         for feat in ['lat', 'lon']:
-            if feat in NUMERIC_X: indices[feat] = NUMERIC_X.index(feat)
+            if feat in NUMERIC_X:
+                indices[feat] = NUMERIC_X.index(feat)
         artifacts["feat_indices"] = indices
 
     except Exception as e:
-        print(f"LỖI khi tải scalers (.pkl): {e}")
+        print(f"ERROR while loading scalers (.pkl): {e}")
         return False
 
-    # 3. Tải Models
+    # 3. Load Models
     try:
         input_size = X_test.shape[-1]
         out_dim = Y_test.shape[-1]
 
-        model_torch = LSTMForecaster(input_size, LSTM_TORCH["hidden_size"], LSTM_TORCH["num_layers"],
-                                     LSTM_TORCH["dropout"])
+        model_torch = LSTMForecaster(
+            input_size,
+            LSTM_TORCH["hidden_size"],
+            LSTM_TORCH["num_layers"],
+            LSTM_TORCH["dropout"]
+        )
         ckpt_torch = MODELS_DIR / CHECKPOINT_LSTM_TORCH.name
 
-        model_scratch = LSTMFromScratchForecaster(input_size, LSTM_SCRATCH["hidden_size"], LSTM_SCRATCH["num_layers"],
-                                                  out_dim, LSTM_SCRATCH["dropout"])
+        model_scratch = LSTMFromScratchForecaster(
+            input_size,
+            LSTM_SCRATCH["hidden_size"],
+            LSTM_SCRATCH["num_layers"],
+            out_dim,
+            LSTM_SCRATCH["dropout"]
+        )
         ckpt_scratch = MODELS_DIR / CHECKPOINT_LSTM_SCRATCH.name
 
         if not ckpt_torch.exists() or not ckpt_scratch.exists():
-            print(f"LỖI: Không tìm thấy tệp model trong {MODELS_DIR}")
-            print("Vui lòng chạy 'python main.py --train' trước.")
+            print(f"ERROR: Model files not found in {MODELS_DIR}")
+            print("Please run 'python main.py --train' first.")
             return False
 
         model_torch.load_state_dict(torch.load(ckpt_torch, map_location=device, weights_only=True))
@@ -109,30 +117,30 @@ def load_artifacts():
         artifacts["model_torch"] = model_torch.to(device).eval()
         artifacts["model_scratch"] = model_scratch.to(device).eval()
     except Exception as e:
-        print(f"LỖI khi tải models (.pt): {e}")
+        print(f"ERROR while loading models (.pt): {e}")
         return False
 
-    # 4. (MỚI) Tải dữ liệu RAW (cho bản đồ tổng quan)
+    # 4. (NEW) Load RAW data (for overview map)
     try:
-        print("Đang tải dữ liệu raw (ibtracs_track_ml.csv)...")
+        print("Loading raw data (ibtracs_track_ml.csv)...")
         raw_data_path = DATA_RAW_DIR / RAW_CSV.name
         if not raw_data_path.exists():
-            print(f"CẢNH BÁO: Không tìm thấy tệp dữ liệu thô tại {raw_data_path}")
-            print("Tính năng 'Tải Bản đồ Tổng quan' sẽ bị vô hiệu hóa.")
-            artifacts["raw_storm_data"] = None  # Vẫn tiếp tục chạy
+            print(f"WARNING: Raw data file not found at {raw_data_path}")
+            print("The 'Overview Map' feature will be disabled.")
+            artifacts["raw_storm_data"] = None  # Continue running anyway
         else:
             df_raw = pd.read_csv(raw_data_path)
-            # Chuyển đổi kiểu dữ liệu ngay lập tức
+            # Convert data types immediately
             df_raw['time'] = pd.to_datetime(df_raw['time'], errors='coerce')
             df_raw['wind'] = pd.to_numeric(df_raw['wind'], errors='coerce')
             df_raw['pres'] = pd.to_numeric(df_raw['pres'], errors='coerce')
             artifacts["raw_storm_data"] = df_raw
-            print(f"Đã tải {df_raw['sid'].nunique()} cơn bão (raw) vào RAM.")
+            print(f"Loaded {df_raw['sid'].nunique()} storms (raw) into RAM.")
     except Exception as e:
-        print(f"LỖI khi tải dữ liệu raw: {e}")
+        print(f"ERROR while loading raw data: {e}")
         artifacts["raw_storm_data"] = None
 
-    print("...Tải artifacts thành công!")
+    print("...Artifacts loaded successfully!")
     return True
 
 
@@ -145,7 +153,7 @@ def index():
 @app.route("/api/get_test_samples")
 def get_test_samples():
     if "X_test" not in artifacts or artifacts["X_test"] is None:
-        return jsonify({"error": "Dữ liệu test chưa được tải"}), 500
+        return jsonify({"error": "Test data has not been loaded"}), 500
 
     rng = np.random.default_rng()
     sample_indices = rng.choice(len(artifacts["X_test"]), 5, replace=False)
@@ -161,9 +169,9 @@ def get_test_samples():
 
 @app.route("/api/predict")
 def predict():
-    # (Hàm này giữ nguyên)
+    # (Function unchanged)
     sample_id = request.args.get("sample_id", default=0, type=int)
-    print(f"Nhận yêu cầu dự đoán cho sample_id: {sample_id}")
+    print(f"Received prediction request for sample_id: {sample_id}")
 
     if "X_test" not in artifacts or sample_id >= len(artifacts["X_test"]):
         return jsonify({"error": "Invalid sample_id"}), 400
@@ -209,16 +217,16 @@ def predict():
     })
 
 
-# --- (MỚI) API ENDPOINT CHO BẢN ĐỒ TỔNG QUAN ---
+# --- (NEW) API ENDPOINT FOR OVERVIEW MAP ---
 @app.route("/api/get_all_tracks")
 def get_all_tracks():
     """
-    Xử lý và trả về dữ liệu của TẤT CẢ các cơn bão dưới dạng JSON.
+    Process and return ALL storm data as JSON.
     """
-    print("Nhận yêu cầu cho /api/get_all_tracks")
+    print("Received request for /api/get_all_tracks")
     if "raw_storm_data" not in artifacts or artifacts["raw_storm_data"] is None:
-        print("LỖI: Dữ liệu raw (thô) chưa được tải trên server.")
-        return jsonify({"error": "Dữ liệu raw (thô) chưa được tải trên server."}), 500
+        print("ERROR: Raw data not loaded on the server.")
+        return jsonify({"error": "Raw data not loaded on the server."}), 500
 
     df = artifacts["raw_storm_data"]
     grouped = df.groupby('sid')
@@ -244,8 +252,8 @@ def get_all_tracks():
             "count": len(points)
         })
 
-    print(f"Đang gửi dữ liệu của {len(all_storms_json)} cơn bão cho client.")
-    return jsonify(all_storms_json)  # Gửi đi file JSON
+    print(f"Sending data of {len(all_storms_json)} storms to client.")
+    return jsonify(all_storms_json)  # Send JSON response
 
 
 # --- RUN APPLICATION ---
@@ -253,4 +261,4 @@ if __name__ == "__main__":
     if load_artifacts():
         app.run(debug=True, port=5000)
     else:
-        print("Không thể khởi động server do thiếu artifacts.")
+        print("Server could not start due to missing artifacts.")
