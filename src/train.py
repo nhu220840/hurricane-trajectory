@@ -1,5 +1,4 @@
 import os
-import random
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -12,23 +11,12 @@ from .config import (
 )
 from .dataset import StormSeqDataset
 from .models import LSTMForecaster, LSTMFromScratchForecaster
-
-
-def set_seed(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    # Add deterministic settings for reproducibility
-    if torch.cuda.is_available():
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+from .utils import set_seed
 
 def _finite_batch(Xb, Yb):
     x_ok = torch.isfinite(Xb).all()
     y_ok = torch.isfinite(Yb).all()
     return bool(x_ok and y_ok)
-
 
 def train_one_model(model_name: str):
     set_seed(SEED)

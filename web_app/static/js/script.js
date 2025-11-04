@@ -1,8 +1,8 @@
 // Global variable to hold the map
 let map = null;
-// (NEW) Global variable to hold the overview map layers
+// Global variable to hold the overview map layers
 let allTracksLayerGroup = null;
-// (NEW) Global variable to hold the layer control (toggle layers)
+// Global variable to hold the layer control (toggle layers)
 let layerControl = null;
 
 // --- Map drawer for the Prediction Demo (unchanged structure) ---
@@ -24,7 +24,7 @@ function drawMap(data) {
         map.setView(data.start_point, 7);
     }
 
-    // (NEW) Remove overview layer if it is currently displayed
+    // Remove overview layer if it is currently displayed
     if (allTracksLayerGroup && map.hasLayer(allTracksLayerGroup)) {
         if (layerControl) {
             layerControl.removeLayer(allTracksLayerGroup);
@@ -57,10 +57,10 @@ function drawMap(data) {
         .addTo(map);
 }
 
-// --- (NEW) Helper functions for the overview map ---
+// --- Helper functions for the overview map ---
 
 /**
- * (NEW) Build a detailed HTML table for the entire storm
+ * Build a detailed HTML table for the entire storm
  */
 function buildStormTableHTML(storm) {
     let html = `<h4 style="margin:5px;">Storm SID: ${storm.sid}</h4>`;
@@ -91,7 +91,7 @@ function buildStormTableHTML(storm) {
 }
 
 /**
- * (NEW) Build a small popup HTML for each point
+ * Build a small popup HTML for each point
  */
 function buildPointPopupHTML(p, sid) {
     const wind_str = p.wind ? `${p.wind.toFixed(0)} kt` : 'N/A';
@@ -106,7 +106,7 @@ function buildPointPopupHTML(p, sid) {
 }
 
 /**
- * (NEW) Main function to draw all 399 storms
+ * Main function to draw all 399 storms
  */
 function drawAllTracks(storms) {
     // 1. Remove previous overview layer if it exists
@@ -172,11 +172,11 @@ function drawAllTracks(storms) {
 document.addEventListener("DOMContentLoaded", function() {
     const selectBox = document.getElementById("sample-select");
     const predictButton = document.getElementById("predict-button");
-    // (NEW) Get the new button and status span
+    // Get the new button and status span
     const loadAllTracksButton = document.getElementById("load-all-tracks-button");
     const loadStatus = document.getElementById("load-status");
 
-    // 1. (NEW) Initialize the map immediately
+    // 1. Initialize the map immediately
     if (!map) {
         map = L.map('map').setView([20, -40], 3); // Global view
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {

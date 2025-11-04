@@ -138,7 +138,6 @@ def _fit_y_scaler(df_train: pd.DataFrame):
 
 
 def _make_windows(X_all, Y_all, sids_idx, lat_arr, lon_arr, N_in, N_out):
-    # (This function is unchanged, it just processes arrays)
     assert N_out == 1, "Current code assumes one-step (N_OUT=1)."
     X_seq, Y_seq, last_obs_latlon, window_sid_idx = [], [], [], []
 
@@ -175,9 +174,6 @@ def _filter_invalid_windows(X, Y, last_obs, sid_idx):
             np.isfinite(Y).all(axis=1) &
             np.isfinite(last_obs).all(axis=1)
     )
-    # dropped = int(X.shape[0] - mask.sum())
-    # if dropped > 0:
-    #     print(f"[WARN] Dropped {dropped} / {X.shape[0]} windows due to NaN/Inf.")
     return X[mask], Y[mask], last_obs[mask], sid_idx[mask]
 
 

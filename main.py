@@ -1,33 +1,12 @@
-# main.py (wrapper in the repo root)
-
 import argparse
 import sys
 from pathlib import Path
+from src import prepare_raw_data, data_processing, train, evaluate
+from src.utils import set_seed
 
 # Ensure the src/ package can be imported when run from the root directory
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.append(str(REPO_ROOT))
-
-# Import modules from the src package
-from src import prepare_raw_data, data_processing, train, evaluate
-
-# (Optional) set seed at the "wrapper" level
-try:
-    from src.utils import set_seed  # if you have utils.py
-except Exception:
-    import os, random, numpy as np, torch
-
-    def set_seed(seed_value=42):
-        random.seed(seed_value)
-        np.random.seed(seed_value)
-        torch.manual_seed(seed_value)
-        os.environ["PYTHONHASHSEED"] = str(seed_value)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(seed_value)
-            torch.cuda.manual_seed_all(seed_value)
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
-
 
 def main():
     # Set seed early (not mandatory, but good practice)

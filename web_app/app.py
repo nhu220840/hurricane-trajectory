@@ -1,22 +1,20 @@
 import torch
 import pickle
 import numpy as np
-import warnings
 import sys
 from flask import Flask, render_template, jsonify, request
 from pathlib import Path
-import pandas as pd  # (NEW) Add pandas
-import random  # (NEW) Add random
-import json  # (NEW) Add json
+import pandas as pd
+import random
 
-# --- (NEW) PATH CONFIGURATION ---
+# --- PATH CONFIGURATION ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 DATA_PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
 DATA_RAW_DIR = PROJECT_ROOT / "data" / "raw"  # (NEW) Add RAW data directory path
 
-# (MODIFIED) Import from src/
+# Import from src/
 from src.models import LSTMForecaster, LSTMFromScratchForecaster
 from src.config import (
     LSTM_TORCH, LSTM_SCRATCH,
@@ -35,7 +33,7 @@ print(f"Using device: {device}")
 artifacts = {}
 
 
-# (MODIFIED) Updated load_artifacts function
+# Updated load_artifacts function
 def load_artifacts():
     """Load models, scalers, test data, AND raw data into RAM."""
     print("Starting to load artifacts...")
@@ -120,7 +118,7 @@ def load_artifacts():
         print(f"ERROR while loading models (.pt): {e}")
         return False
 
-    # 4. (NEW) Load RAW data (for overview map)
+    # 4. Load RAW data (for overview map)
     try:
         print("Loading raw data (ibtracs_track_ml.csv)...")
         raw_data_path = DATA_RAW_DIR / RAW_CSV.name
@@ -169,7 +167,6 @@ def get_test_samples():
 
 @app.route("/api/predict")
 def predict():
-    # (Function unchanged)
     sample_id = request.args.get("sample_id", default=0, type=int)
     print(f"Received prediction request for sample_id: {sample_id}")
 
@@ -217,7 +214,7 @@ def predict():
     })
 
 
-# --- (NEW) API ENDPOINT FOR OVERVIEW MAP ---
+# --- API ENDPOINT FOR OVERVIEW MAP ---
 @app.route("/api/get_all_tracks")
 def get_all_tracks():
     """
