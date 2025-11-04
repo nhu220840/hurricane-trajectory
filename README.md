@@ -16,8 +16,8 @@ The project frames hurricane trajectory prediction as a time-series forecasting 
 
 3. **Modeling**  
    The project implements and compares two distinct LSTM models:
-   - **PyTorch LSTM (`LSTMForecaster`)** — a standard, optimized LSTM model built using PyTorch’s `nn.LSTM` module.  
-   - **Scratch LSTM (`LSTMFromScratchForecaster`)** — a complete LSTM model built “from scratch” using manually defined `_ManualLSTMCell` logic to demonstrate the underlying mechanics.
+   - **PyTorch LSTM (`LSTMForecaster`)** - a standard, optimized LSTM model built using PyTorch’s `nn.LSTM` module.  
+   - **Scratch LSTM (`LSTMFromScratchForecaster`)** - a complete LSTM model built “from scratch” using manually defined `_ManualLSTMCell` logic to demonstrate the underlying mechanics.
 
 4. **Demonstration**  
    A Flask web application (`web_app/app.py`) provides an interactive interface to:
