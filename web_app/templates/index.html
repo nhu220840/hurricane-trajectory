@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Hurricane Demo</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.0/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.0/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.0/dist/leaflet.markercluster.js"></script>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <h1>Hurricane Trajectory Demo</h1>
+
+    <div class="controls">
+        <select id="sample-select">
+            <option>Loading samples...</option>
+        </select>
+        <button id="predict-button" disabled>Run Prediction Demo</button>
+
+        <button id="load-all-tracks-button">Load Overview Map (399 hurricanes)</button>
+        <span id="load-status" style="margin-left: 10px;"></span>
+    </div>
+
+    <div id="map" style="height: 600px; width: 100%;"></div>
+
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>
