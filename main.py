@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 sys.path.append(str(REPO_ROOT))
 
 def main():
-    # Set seed early (not mandatory, but good practice)
+    # Set seed
     set_seed(42)
 
     parser = argparse.ArgumentParser(description="Hurricane trajectory pipeline (delta mode)")
