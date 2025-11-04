@@ -53,8 +53,11 @@ hurricane-trajectory-main/
 │
 └── web_app/
     ├── app.py              # The Flask server
+    └── static/
+        └── js/
+            └── scripts.js
     └── templates/
-        └── index.html      # Frontend HTML
+        └── index.html
 ```
 
 ---
