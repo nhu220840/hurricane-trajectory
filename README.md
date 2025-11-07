@@ -140,7 +140,7 @@ The application will load the models and data into memory, allowing you to fetch
 
 ## License
 
-MIT License © Nhu Do Nguyen Gia
+MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 
